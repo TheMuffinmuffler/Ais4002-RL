@@ -63,41 +63,72 @@ def test():
         return
 
     history = np.array(history)
+    cumulative_reward = np.cumsum(history[:, 5])
 
-    plt.figure(figsize=(10, 9))
-
+    # --- Figure 1: Time Series Dynamics ---
+    plt.figure(figsize=(12, 10))
+    
     plt.subplot(4, 1, 1)
-    plt.plot(np.rad2deg(history[:, 0]), label="Theta / Arm angle")
-    plt.plot(np.rad2deg(history[:, 1]), label="Alpha / Pendulum angle")
-    plt.axhline(180, linestyle="--", label="Upright +180 deg")
-    plt.axhline(-180, linestyle="--", label="Upright -180 deg")
+    plt.plot(np.rad2deg(history[:, 0]), label="Theta (Arm)", color='blue')
+    plt.plot(np.rad2deg(history[:, 1]), label="Alpha (Pendulum)", color='red')
+    plt.axhline(180, linestyle="--", color='black', alpha=0.3)
+    plt.axhline(-180, linestyle="--", color='black', alpha=0.3)
+    plt.axhline(0, linestyle="-", color='black', alpha=0.1)
     plt.ylabel("Angle (deg)")
-    plt.legend()
-    plt.grid(True)
+    plt.title("QUBE-Servo 2 TD3 Performance")
+    plt.legend(loc='upper right')
+    plt.grid(True, alpha=0.3)
 
     plt.subplot(4, 1, 2)
-    plt.plot(np.rad2deg(history[:, 2]), label="Theta dot")
-    plt.plot(np.rad2deg(history[:, 3]), label="Alpha dot")
+    plt.plot(np.rad2deg(history[:, 2]), label="Theta dot", color='cyan')
+    plt.plot(np.rad2deg(history[:, 3]), label="Alpha dot", color='magenta')
     plt.ylabel("Velocity (deg/s)")
-    plt.legend()
-    plt.grid(True)
+    plt.legend(loc='upper right')
+    plt.grid(True, alpha=0.3)
 
     plt.subplot(4, 1, 3)
-    plt.plot(history[:, 4], label="TD3 action / voltage")
+    plt.step(range(len(history)), history[:, 4], label="Action (Voltage)", color='green')
     plt.ylabel("Voltage (V)")
-    plt.legend()
-    plt.grid(True)
+    plt.ylim(-11, 11)
+    plt.legend(loc='upper right')
+    plt.grid(True, alpha=0.3)
 
     plt.subplot(4, 1, 4)
-    plt.plot(history[:, 5], label="Reward per step")
+    plt.plot(history[:, 5], label="Step Reward", color='orange', alpha=0.6)
+    plt.plot(cumulative_reward / (np.arange(len(history)) + 1), label="Avg Reward", color='red')
     plt.xlabel("Step")
     plt.ylabel("Reward")
-    plt.legend()
-    plt.grid(True)
+    plt.legend(loc='upper right')
+    plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("td3_test_plot.png", dpi=200)
-    print("Test plot saved to td3_test_plot.png")
+    plt.savefig("td3_dynamics.png", dpi=200)
+    print("Dynamics plot saved to td3_dynamics.png")
+
+    # --- Figure 2: Analysis & Phase Space ---
+    plt.figure(figsize=(12, 5))
+
+    # Phase Plot: Pendulum
+    plt.subplot(1, 2, 1)
+    plt.plot(np.rad2deg(history[:, 1]), np.rad2deg(history[:, 3]), color='purple')
+    plt.axvline(180, color='red', linestyle='--', alpha=0.5)
+    plt.axvline(-180, color='red', linestyle='--', alpha=0.5)
+    plt.xlabel("Alpha (deg)")
+    plt.ylabel("Alpha Dot (deg/s)")
+    plt.title("Pendulum Phase Space")
+    plt.grid(True, alpha=0.3)
+
+    # Cumulative Reward
+    plt.subplot(1, 2, 2)
+    plt.plot(cumulative_reward, color='brown', linewidth=2)
+    plt.xlabel("Step")
+    plt.ylabel("Cumulative Reward")
+    plt.title("Learning Progress (Cumulative)")
+    plt.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("td3_analysis.png", dpi=200)
+    print("Analysis plot saved to td3_analysis.png")
 
     env.close()
 
