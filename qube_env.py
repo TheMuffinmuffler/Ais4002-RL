@@ -132,15 +132,25 @@ class QubeEnv(gym.Env):
         # Reward function
         theta, alpha, th_dot, al_dot = self.state
         
-        # Goal: alpha near pi (upright), theta near 0
+        # 1. Pendulum upright goal (alpha near pi)
+        # alpha_err is 0 when alpha = pi, and 4 when alpha = 0
         alpha_err = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 
         
-        # Balanced reward: allow movement for swing-up but punish large angles
-        theta_penalty = 1.0 * theta**2
+        # 2. Centering the arm (theta near 0)
+        # We increase the weight of theta_penalty to encourage centering.
+        # We also make it more aggressive when the pendulum is upright.
+        is_upright = np.cos(alpha) < -0.9 # Pendulum is within ~25 degrees of upright
+        
+        theta_weight = 2.0 if is_upright else 0.5
+        theta_penalty = theta_weight * (theta**2)
+        
+        # Hard penalty for hitting the safety limits
         if np.abs(theta) > 1.4: # Slightly before 90 degrees (1.57)
-            theta_penalty += 50.0 
+            theta_penalty += 100.0 
 
-        reward = -(20.0 * alpha_err + theta_penalty + 0.05 * al_dot**2 + 0.05 * th_dot**2 + 0.001 * voltage**2)
+        # Total reward
+        # weights: 20 for pendulum upright, higher theta penalty for centering
+        reward = -(20.0 * alpha_err + theta_penalty + 0.1 * al_dot**2 + 0.1 * th_dot**2 + 0.001 * voltage**2)
 
         terminated = False
         truncated = False
