@@ -154,4 +154,4 @@ cython_debug/
 # Project specific
 logs/
 Data/
-*.png
+
