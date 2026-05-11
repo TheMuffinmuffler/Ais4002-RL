@@ -23,7 +23,8 @@ def train():
     # Configure logger to save to CSV
     new_logger = configure("./logs/ppo_v3/", ["stdout", "csv", "tensorboard"])
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Force CPU for PPO
+    device = "cpu"
     print(f"Using device: {device}")
     
     # Increase number of environments

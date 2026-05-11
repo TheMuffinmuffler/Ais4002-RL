@@ -3,7 +3,9 @@ from qube_env import QubeEnv
 import matplotlib.pyplot as plt
 
 def swing_up_pd_controller(obs, env):
-    theta, alpha, th_dot, al_dot = obs
+    sin_th, cos_th, sin_al, cos_al, th_dot, al_dot = obs
+    theta = np.arctan2(sin_th, cos_th)
+    alpha = np.arctan2(sin_al, cos_al)
     # alpha=0 is down, pi is upright
     
     # Parameters for swing-up
@@ -55,16 +57,22 @@ def main():
             
     history = np.array(history)
     
+    # Reconstruct angles for plotting
+    thetas = np.arctan2(history[:, 0], history[:, 1])
+    alphas = np.arctan2(history[:, 2], history[:, 3])
+    theta_dots = history[:, 4]
+    alpha_dots = history[:, 5]
+    
     plt.figure(figsize=(10, 6))
     plt.subplot(2, 1, 1)
-    plt.plot(np.rad2deg(history[:, 0]), label='Theta (Arm)')
-    plt.plot(np.rad2deg(history[:, 1]), label='Alpha (Pendulum)')
+    plt.plot(np.rad2deg(thetas), label='Theta (Arm)')
+    plt.plot(np.rad2deg(alphas), label='Alpha (Pendulum)')
     plt.legend()
     plt.ylabel('Angle (deg)')
     
     plt.subplot(2, 1, 2)
-    plt.plot(np.rad2deg(history[:, 2]), label='Theta Dot')
-    plt.plot(np.rad2deg(history[:, 3]), label='Alpha Dot')
+    plt.plot(np.rad2deg(theta_dots), label='Theta Dot')
+    plt.plot(np.rad2deg(alpha_dots), label='Alpha Dot')
     plt.legend()
     plt.ylabel('Velocity (deg/s)')
     

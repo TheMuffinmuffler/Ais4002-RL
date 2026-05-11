@@ -177,8 +177,10 @@ def deploy():
             theta_deg = qube.getMotorAngle()
             alpha_raw = qube.getPendulumAngle() 
             
-            # Wrap alpha to [-180, 180]
-            alpha_deg = ((alpha_raw + 180) % 360) - 180
+            # Coordinate Transform: Model expects 0 at TOP
+            # alpha_raw = 0 (Bottom) -> alpha_deg = -180
+            # alpha_raw = 180 (Top)  -> alpha_deg = 0
+            alpha_deg = ((alpha_raw) % 360) - 180
             
             # Convert to Radians
             theta = np.deg2rad(theta_deg)
@@ -196,16 +198,15 @@ def deploy():
             th_dot_filt = VELOCITY_FILTER * th_dot_filt + (1 - VELOCITY_FILTER) * th_dot_raw
             al_dot_filt = VELOCITY_FILTER * al_dot_filt + (1 - VELOCITY_FILTER) * al_dot_raw
             
-            # --- HYSTERESIS LOGIC ---
+            # --- HYSTERESIS LOGIC (ADJUSTED FOR 0=UP) ---
             abs_alpha = abs(alpha_deg)
             prev_mode = in_balance_mode
             
-            if not in_balance_mode and abs_alpha > BAL_THRESHOLD_IN:
+            if not in_balance_mode and abs_alpha < 30: # Within 30 deg of upright
                 in_balance_mode = True
-                # RESET FILTERS to prevent swing-up momentum from glitching the catch
                 th_dot_filt = 0
                 al_dot_filt = 0
-            elif in_balance_mode and abs_alpha < BAL_THRESHOLD_OUT:
+            elif in_balance_mode and abs_alpha > 50: # Fell outside 50 deg
                 in_balance_mode = False
 
             if in_balance_mode:

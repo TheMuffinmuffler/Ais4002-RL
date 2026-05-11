@@ -1,142 +1,167 @@
 import numpy as np
 import time
+import sys
+import os
 import torch
+import csv
+import threading
+import queue
+from datetime import datetime
 from stable_baselines3 import TD3
-
 from QUBE import QUBE
 from control import COM_PORT
 
+# --- PERFORMANCE TUNING ---
+POWER_GAIN = 0.5       
+MOTOR_INVERT = -1.0     
+VELOCITY_FILTER = 0.4  
+ACTION_FILTER = 0.5    
+SAFETY_LIMIT = 2.1     
+SAFETY_KILL = 2.3      
+DEADBAND = 0.45        
+# --------------------------
 
-def get_device():
-    if torch.cuda.is_available():
-        return "cuda"
-    elif torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+class AsyncLogger:
+    def __init__(self, filename):
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        self.queue = queue.Queue()
+        self.filename = filename
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._worker)
+        self.thread.daemon = True
+        self.thread.start()
 
+    def _worker(self):
+        with open(self.filename, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["time", "dt", "theta", "alpha", "th_dot", "al_dot", "voltage", "mode"])
+            while not (self.stop_event.is_set() and self.queue.empty()):
+                try:
+                    data = self.queue.get(timeout=0.1)
+                    writer.writerow(data)
+                except queue.Empty:
+                    continue
+
+    def log(self, data):
+        self.queue.put(data)
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join()
 
 def deploy():
     # 1. Load trained TD3 model
     model_path = "models/qube_td3_final.zip"
-    device = get_device()
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         model = TD3.load(model_path, device=device)
-        print(f"TD3 model loaded from {model_path} on {device}")
+        print(f"TD3 Model loaded from {model_path}")
     except Exception as e:
-        print(f"Error loading TD3 model: {e}")
+        print(f"Error loading model: {e}")
         return
 
-    # 2. Initialize connection to Teensy / QUBE
-    port = COM_PORT
-    baudrate = 115200
-
+    # 2. Initialize hardware
     try:
-        qube = QUBE(port, baudrate)
-        print(f"Connected to QUBE on {port}")
+        qube = QUBE(COM_PORT, 115200)
+        print(f"Connected to Qube on {COM_PORT}")
+        time.sleep(2)
     except Exception as e:
-        print(f"Could not connect to {port}: {e}")
+        print(f"Connection failed: {e}")
         return
 
-    # 3. Calibration
-    print("Initializing encoders...")
-    qube.setRGB(999, 999, 999)  # White
-
+    print("Calibrating...")
+    qube.setRGB(999, 999, 999) # White
     qube.resetMotorEncoder()
-    time.sleep(1.0)
-
-    qube.resetPendulumEncoder()
-    time.sleep(0.5)
-
+    time.sleep(1)
+    qube.resetPendulumEncoder() # Resetting at BOTTOM
     qube.update()
+    
+    print("\n--- READY ---")
+    print("1. Ensure pendulum is HANGING DOWN.")
+    print("2. Deployment starts in 5s...")
+    time.sleep(5)
+    qube.setRGB(0, 999, 999) # Cyan for TD3
 
-    print("--- READY ---")
-    print("1. Hold the pendulum hanging down and still.")
-    print("2. Starting in 5 seconds...")
-    time.sleep(5.0)
+    log_filename = f"logs/deploy_td3_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    logger = AsyncLogger(log_filename)
 
-    qube.setRGB(0, 999, 0)  # Green
-
-    t_last = time.time()
-
-    qube.update()
-    prev_theta = np.deg2rad(qube.getMotorAngle())
-    prev_alpha = np.deg2rad(qube.getPendulumAngle())
-
-    max_arm_angle = np.deg2rad(90.0)
-    max_voltage = 10.0
+    t_start = time.time()
+    t_last = t_start
+    prev_theta = 0
+    prev_alpha = 0
+    th_dot_filt = 0
+    al_dot_filt = 0
+    prev_voltage = 0.0
 
     try:
         while True:
-            loop_start = time.time()
-
-            # 4. Read sensors
+            t_now = time.time()
             qube.update()
-
+            
             theta_deg = qube.getMotorAngle()
-            alpha_deg = qube.getPendulumAngle()
-
+            alpha_raw = qube.getPendulumAngle()
+            
+            # Coordinate Transform: Model expects 0 at TOP
+            alpha_deg = ((alpha_raw) % 360) - 180
+            
             theta = np.deg2rad(theta_deg)
             alpha = np.deg2rad(alpha_deg)
-
-            # 5. Compute dt
-            t_now = time.time()
+            
             dt = t_now - t_last
             t_last = t_now
+            if dt <= 0: dt = 0.02
+            
+            th_dot_raw = (theta - prev_theta) / dt
+            al_dot_raw = (alpha - prev_alpha) / dt
+            th_dot_filt = VELOCITY_FILTER * th_dot_filt + (1 - VELOCITY_FILTER) * th_dot_raw
+            al_dot_filt = VELOCITY_FILTER * al_dot_filt + (1 - VELOCITY_FILTER) * al_dot_raw
+            
+            pred_theta = theta + th_dot_filt * 0.02
+            pred_alpha = alpha + al_dot_filt * 0.02
 
-            if dt <= 0.0:
-                continue
+            obs = np.array([
+                np.sin(pred_theta), np.cos(pred_theta),
+                np.sin(pred_alpha), np.cos(pred_alpha),
+                th_dot_filt, al_dot_filt
+            ], dtype=np.float32)
 
-            # 6. Estimate velocities
-            theta_dot = (theta - prev_theta) / dt
-            alpha_dot = (alpha - prev_alpha) / dt
+            action, _ = model.predict(obs, deterministic=True)
+            requested_voltage = float(action[0]) * POWER_GAIN * MOTOR_INVERT
+            
+            voltage = (1 - ACTION_FILTER) * prev_voltage + ACTION_FILTER * requested_voltage
+            
+            if abs(voltage) > 0.1:
+                voltage += np.sign(voltage) * DEADBAND
 
+            abs_theta = abs(theta)
+            if abs_theta > SAFETY_LIMIT:
+                voltage = np.sign(theta) * (abs_theta - SAFETY_LIMIT) * 15.0
+                if abs_theta > SAFETY_KILL:
+                    print(f"Safety Kill! Theta: {theta_deg:.1f}")
+                    break
+
+            voltage = np.clip(voltage, -8.0, 8.0)
+            qube.setMotorVoltage(voltage)
+            prev_voltage = voltage
             prev_theta = theta
             prev_alpha = alpha
 
-            # 7. Build observation vector
-            # Must match training environment:
-            # [sin(theta), cos(theta), sin(alpha), cos(alpha), theta_dot, alpha_dot]
-            obs = np.array([
-                np.sin(theta),
-                np.cos(theta),
-                np.sin(alpha),
-                np.cos(alpha),
-                theta_dot,
-                alpha_dot
-            ], dtype=np.float32)
+            if int(t_now * 50) % 5 == 0:
+                print(f"Th:{theta_deg:5.1f} | Al:{alpha_deg:5.1f} | V:{voltage:5.2f}", end='\r')
 
-            # 8. Predict TD3 action
-            action, _ = model.predict(obs, deterministic=True)
-            voltage = float(action[0])
-
-            # 9. Clip voltage for safety
-            voltage = float(np.clip(voltage, -max_voltage, max_voltage))
-
-            # 10. Safety wall
-            if abs(theta) > max_arm_angle:
-                print(f"Safety wall hit. Theta = {theta_deg:.1f} deg. Motor stopped.")
-                voltage = 0.0
-                qube.setRGB(999, 0, 0)  # Red
-
-            # 11. Send voltage
-            qube.setMotorVoltage(voltage)
-
-            # 12. Maintain approximately 50 Hz control loop
-            elapsed = time.time() - loop_start
-            sleep_time = max(0.0, 0.02 - elapsed)
-            time.sleep(sleep_time)
+            logger.log([t_now - t_start, dt, theta_deg, alpha_deg, th_dot_filt, al_dot_filt, voltage, "TD3"])
+            
+            elapsed = time.time() - t_now
+            time.sleep(max(0, 0.02 - elapsed))
 
     except KeyboardInterrupt:
-        print("\nStopping... setting motor voltage to 0.")
-
+        print("\nDeployment stopped.")
     finally:
         qube.setMotorVoltage(0.0)
-        qube.setRGB(999, 0, 0)  # Red
-
-        if hasattr(qube, "master"):
+        qube.setRGB(999, 0, 0)
+        logger.stop()
+        if hasattr(qube, 'master'):
             qube.master.close()
-
 
 if __name__ == "__main__":
     deploy()
