@@ -5,6 +5,7 @@ from qube_env import QubeEnv
 import matplotlib.pyplot as plt
 
 def test():
+    os.makedirs("plots", exist_ok=True)
     # Load the final model
     try:
         model_path = "models/qube_ppo_final.zip"
@@ -49,6 +50,37 @@ def test():
     history = np.array(history)
     cumulative_reward = np.cumsum(history[:, 5])
 
+    # Analysis: % of time upright
+    upright_mask = np.cos(history[:, 1]) < -0.9
+    upright_percent = (np.sum(upright_mask) / len(history)) * 100
+    
+    print(f"Percentage of time spent upright: {upright_percent:.2f}%")
+    
+    if np.any(upright_mask):
+        upright_data = history[upright_mask]
+        # Alpha is wrapped around pi or -pi
+        # Let's map it to [0, 2pi] and then calculate distance to pi
+        alpha_upright = upright_data[:, 1]
+        alpha_err_upright = np.abs(np.arctan2(np.sin(alpha_upright), np.cos(alpha_upright)) - np.pi)
+        # Handle wrap around
+        alpha_err_upright = np.where(alpha_err_upright > np.pi, 2*np.pi - alpha_err_upright, alpha_err_upright)
+        
+        mae_alpha = np.rad2deg(np.mean(np.abs(alpha_err_upright)))
+        mae_theta = np.rad2deg(np.mean(np.abs(upright_data[:, 0])))
+        avg_al_dot = np.rad2deg(np.mean(np.abs(upright_data[:, 3])))
+        avg_th_dot = np.rad2deg(np.mean(np.abs(upright_data[:, 2])))
+        
+        print(f"When upright:")
+        print(f"  MAE Alpha: {mae_alpha:.2f} deg")
+        print(f"  MAE Theta: {mae_theta:.2f} deg")
+        print(f"  Avg Alpha Dot: {avg_al_dot:.2f} deg/s")
+        print(f"  Avg Theta Dot: {avg_th_dot:.2f} deg/s")
+        
+        limit_hits = np.sum(np.abs(history[:, 0]) > 1.4)
+        print(f"Safety limit hits (|theta| > 1.4): {limit_hits} / {len(history)} steps")
+    else:
+        print("Model never reached upright position.")
+
     # --- Figure 1: Time Series Dynamics ---
     plt.figure(figsize=(12, 10))
 
@@ -86,7 +118,7 @@ def test():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("ppo_dynamics.png", dpi=200)
+    plt.savefig("plots/ppo_dynamics.png", dpi=200)
     print("Dynamics plot saved to ppo_dynamics.png")
 
     # --- Figure 2: Analysis & Phase Space ---
@@ -111,7 +143,7 @@ def test():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("ppo_analysis.png", dpi=200)
+    plt.savefig("plots/ppo_analysis.png", dpi=200)
     print("Analysis plot saved to ppo_analysis.png")
 
     env.close()

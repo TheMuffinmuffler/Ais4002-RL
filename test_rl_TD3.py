@@ -14,6 +14,7 @@ def get_device():
 
 
 def test():
+    os.makedirs("plots", exist_ok=True)
     # Load the trained TD3 model
     model_path = "models/qube_td3_final.zip"
     device = get_device()
@@ -102,7 +103,7 @@ def test():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("td3_dynamics.png", dpi=200)
+    plt.savefig("plots/td3_dynamics.png", dpi=200)
     print("Dynamics plot saved to td3_dynamics.png")
 
     # --- Figure 2: Analysis & Phase Space ---
@@ -127,7 +128,7 @@ def test():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("td3_analysis.png", dpi=200)
+    plt.savefig("plots/td3_analysis.png", dpi=200)
     print("Analysis plot saved to td3_analysis.png")
 
     env.close()
