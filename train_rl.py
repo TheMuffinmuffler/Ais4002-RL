@@ -67,7 +67,7 @@ def train():
     )
     model.set_logger(new_logger)
     
-    total_steps = 1_000_000
+    total_steps = 2_000_000
     print(f"Starting training ({total_steps} steps) with random disturbances...")
     model.learn(total_timesteps=total_steps, callback=checkpoint_callback)
     

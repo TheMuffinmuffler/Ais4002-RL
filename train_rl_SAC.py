@@ -68,7 +68,7 @@ def main():
         render=False
     )
 
-    total_steps = 500_000
+    total_steps = 1_000_000
     print(f"Starting SAC training ({total_steps} steps)...")
     model.learn(
         total_timesteps=total_steps,
