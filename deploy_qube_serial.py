@@ -57,13 +57,13 @@ from QUBE import QUBE
 from control import COM_PORT
 
 # --- PERFORMANCE TUNING ---
-POWER_GAIN = 0.4       # DAMPENED for cable safety
-MOTOR_INVERT = -1.0     
+POWER_GAIN = 1.0       # TUNED
+MOTOR_INVERT = 1.0     
 VELOCITY_FILTER = 0.4  # REACTIVE
 ACTION_FILTER = 0.5    # RESPONSIVE
-SAFETY_LIMIT = 0.5     # ~30 deg
-SAFETY_KILL = 0.8      # ~45 deg
-DEADBAND = 0.3         
+SAFETY_LIMIT = 2.0     # ~115 deg
+SAFETY_KILL = 2.27     # ~130 deg
+DEADBAND = 0.45        # Matches stiction in env
 # --------------------------
 
 # --- BACKGROUND LOGGER ---
@@ -96,8 +96,15 @@ class AsyncLogger:
 
 def deploy():
     # 1. Load your trained RL model
+    from qube_env import QubeEnv
+    env = QubeEnv()
+    custom_objects = {
+        "observation_space": env.observation_space,
+        "action_space": env.action_space
+    }
+
     try:
-        model = PPO.load("models/qube_ppo_final.zip")
+        model = PPO.load("models/qube_ppo_final.zip", custom_objects=custom_objects)
         print("PPO Model loaded.")
     except Exception as e:
         import traceback
@@ -127,6 +134,10 @@ def deploy():
     qube.resetPendulumEncoder()
     qube.update()
     
+    # Pre-initialize readings to prevent velocity spikes
+    prev_theta = np.deg2rad(qube.getMotorAngle())
+    prev_alpha = np.deg2rad(((qube.getPendulumAngle()) % 360) - 180)
+    
     print("--- READY ---")
     print("1. Hold the pendulum HANGING DOWN and STILL.")
     print("2. Starting in 5 seconds...")
@@ -147,14 +158,16 @@ def deploy():
 
     t_last = time.time()
     t_start = t_last
-    prev_theta = 0
-    prev_alpha = 0
     
     th_dot_filt = 0
     al_dot_filt = 0
     voltage = 0.0
     prev_voltage = 0.0
     step_count = 0
+    
+    left_hits = 0
+    right_hits = 0
+    MAX_HITS = 5
     
     stall_counter = 0
     STALL_LIMIT = 50 # 1.0 second at 50Hz
@@ -164,22 +177,16 @@ def deploy():
     BAL_THRESHOLD_IN = 150 # Deg
     BAL_THRESHOLD_OUT = 110 # Deg
     
-    # Warm up
-    for _ in range(10): 
-        qube.update()
-        time.sleep(0.02)
-
     try:
         while True:
             t_now = time.time()
             qube.update()
             
+            # Raw readings
             theta_deg = qube.getMotorAngle()
             alpha_raw = qube.getPendulumAngle() 
             
             # Coordinate Transform: Model expects 0 at TOP
-            # alpha_raw = 0 (Bottom) -> alpha_deg = -180
-            # alpha_raw = 180 (Top)  -> alpha_deg = 0
             alpha_deg = ((alpha_raw) % 360) - 180
             
             # Convert to Radians
@@ -190,9 +197,9 @@ def deploy():
             t_last = t_now
             if dt <= 0: dt = 0.02
             
-            # 4. Calculate Velocities
-            th_dot_raw = (theta - prev_theta) / dt
-            al_dot_raw = (alpha - prev_alpha) / dt
+            # 4. Calculate Velocities with clipping
+            th_dot_raw = np.clip((theta - prev_theta) / dt, -50, 50)
+            al_dot_raw = np.clip((alpha - prev_alpha) / dt, -50, 50)
             
             # Exponential Moving Average Filter
             th_dot_filt = VELOCITY_FILTER * th_dot_filt + (1 - VELOCITY_FILTER) * th_dot_raw
@@ -200,7 +207,6 @@ def deploy():
             
             # --- HYSTERESIS LOGIC (ADJUSTED FOR 0=UP) ---
             abs_alpha = abs(alpha_deg)
-            prev_mode = in_balance_mode
             
             if not in_balance_mode and abs_alpha < 30: # Within 30 deg of upright
                 in_balance_mode = True
@@ -238,26 +244,39 @@ def deploy():
             if abs(voltage) > 0.05:
                 voltage += np.sign(voltage) * current_deadband
 
-            # 7. SAFETY WALL (EXPLICIT HARDWARE DIRECTIONS)
+            # 7. SAFETY WALL
             abs_theta = np.abs(theta)
-            safety_v = 0.0
+            theta_deg_abs = abs(theta_deg)
+            
+            # Hard Kill for physically impossible angles
+            if theta_deg_abs > 180.0:
+                print(f"\nCRITICAL SAFETY KILL! Angle out of bounds: {theta_deg:.1f}")
+                break
+
             if abs_theta > SAFETY_LIMIT:
                 if abs_theta > SAFETY_KILL:
-                    print(f"\nEMERGENCY KILL! Theta: {theta_deg:5.1f} | Power Off")
-                    voltage = 0.0
-                    qube.setMotorVoltage(0.0)
-                    break 
+                    if theta > 0:
+                        right_hits += 1
+                        print(f"\nHit RIGHT Stopper! ({right_hits}/{MAX_HITS})")
+                    else:
+                        left_hits += 1
+                        print(f"\nHit LEFT Stopper! ({left_hits}/{MAX_HITS})")
+                    
+                    if left_hits >= MAX_HITS or right_hits >= MAX_HITS:
+                        print(f"Safety Kill! Max hits reached. Theta: {theta_deg:.1f}")
+                        break
+                    
+                    # Bounce back
+                    qube.setMotorVoltage(-np.sign(theta) * 6.0)
+                    time.sleep(0.2)
+                    qube.update()
+                    prev_theta = np.deg2rad(qube.getMotorAngle())
+                    th_dot_filt = 0
+                    continue
                 else:
-                    # HARDWARE REALITY:
-                    # Positive Hardware Voltage -> CCW (Negative Theta)
-                    # Negative Hardware Voltage -> CW  (Positive Theta)
                     overshoot = abs_theta - SAFETY_LIMIT
                     spring_k = 20.0 
-                    # If theta is Positive, we need CCW movement -> Hardware POSITIVE V
-                    # If theta is Negative, we need CW movement  -> Hardware NEGATIVE V
-                    # So: voltage = sign(theta) * power
-                    safety_v = np.sign(theta) * (overshoot * spring_k + 2.0)
-                    voltage = safety_v
+                    voltage = -np.sign(theta) * (overshoot * spring_k + 2.0)
 
             # HARD LIMIT TO PROTECT MAGNETS
             voltage = np.clip(voltage, -6.0, 6.0)

@@ -6,18 +6,66 @@ import torch
 import csv
 import threading
 import queue
+import pickle
+import cloudpickle
 from datetime import datetime
+
+# --- STABLE BASELINES 3 COMPATIBILITY HACK ---
+import stable_baselines3.common.utils as sb3_utils
+try:
+    import numpy.random._pickle as nprp
+    for bg_name in ['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']:
+        if hasattr(nprp, bg_name):
+            bg_cls = getattr(nprp, bg_name)
+            nprp.BitGenerators[bg_cls] = bg_cls
+except:
+    pass
+
+class DummySchedule:
+    def __init__(self, value=0.0, *args, **kwargs): self.value = value
+    def __call__(self, *args, **kwargs): return self.value
+    @classmethod
+    def load(cls, *args, **kwargs): return cls()
+
+for name in ["ConstantSchedule", "FloatSchedule", "LinearSchedule"]:
+    if not hasattr(sb3_utils, name):
+        setattr(sb3_utils, name, DummySchedule)
+
+original_cloudpickle_loads = cloudpickle.loads
+
+def patched_cloudpickle_loads(data, *args, **kwargs):
+    try:
+        return original_cloudpickle_loads(data, *args, **kwargs)
+    except ModuleNotFoundError as e:
+        if "numpy._core" in str(e):
+            import numpy.core.numeric as _num
+            import numpy.core.multiarray as _mul
+            import numpy.core.umath as _uma
+            sys.modules["numpy._core"] = np.core
+            sys.modules["numpy._core.numeric"] = _num
+            sys.modules["numpy._core.multiarray"] = _mul
+            sys.modules["numpy._core.umath"] = _uma
+            try:
+                return original_cloudpickle_loads(data, *args, **kwargs)
+            finally:
+                for mod in ["numpy._core", "numpy._core.numeric", "numpy._core.multiarray", "numpy._core.umath"]:
+                    if mod in sys.modules: del sys.modules[mod]
+        raise
+
+cloudpickle.loads = patched_cloudpickle_loads
+# --- END HACK ---
+
 from stable_baselines3 import SAC
 from QUBE import QUBE
 from control import COM_PORT
 
 # --- PERFORMANCE TUNING ---
-POWER_GAIN = 0.5       
-MOTOR_INVERT = -1.0     
+POWER_GAIN = 1.0       
+MOTOR_INVERT = 1.0     
 VELOCITY_FILTER = 0.4  
 ACTION_FILTER = 0.5    
-SAFETY_LIMIT = 2.1     # Match the trained 136 deg limit (2.37 rad), but slightly tighter for safety
-SAFETY_KILL = 2.3      
+SAFETY_LIMIT = 2.0     # ~115 deg (Virtual bumper start)
+SAFETY_KILL = 2.27     # ~130 deg (Hard bounce/kill)
 DEADBAND = 0.45        # Matches stiction in env
 # --------------------------
 
@@ -53,8 +101,16 @@ def deploy():
     # 1. Load trained SAC model
     model_path = "models/qube_sac_final.zip"
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    from qube_env import QubeEnv
+    env = QubeEnv()
+    custom_objects = {
+        "observation_space": env.observation_space,
+        "action_space": env.action_space
+    }
+
     try:
-        model = SAC.load(model_path, device=device)
+        model = SAC.load(model_path, device=device, custom_objects=custom_objects)
         print(f"SAC Model loaded from {model_path}")
     except Exception as e:
         print(f"Error loading model: {e}")
@@ -85,13 +141,20 @@ def deploy():
     log_filename = f"logs/deploy_sac_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     logger = AsyncLogger(log_filename)
 
+    # Pre-initialize readings to prevent velocity spikes
+    qube.update()
+    prev_theta = np.deg2rad(qube.getMotorAngle())
+    prev_alpha = np.deg2rad(((qube.getPendulumAngle()) % 360) - 180)
+
     t_start = time.time()
     t_last = t_start
-    prev_theta = 0
-    prev_alpha = 0
     th_dot_filt = 0
     al_dot_filt = 0
     prev_voltage = 0.0
+    
+    left_hits = 0
+    right_hits = 0
+    MAX_HITS = 5
 
     try:
         while True:
@@ -114,9 +177,9 @@ def deploy():
             t_last = t_now
             if dt <= 0: dt = 0.02
             
-            # Velocities with filtering
-            th_dot_raw = (theta - prev_theta) / dt
-            al_dot_raw = (alpha - prev_alpha) / dt
+            # Velocities with filtering and capping to prevent overflows
+            th_dot_raw = np.clip((theta - prev_theta) / dt, -50, 50)
+            al_dot_raw = np.clip((alpha - prev_alpha) / dt, -50, 50)
             th_dot_filt = VELOCITY_FILTER * th_dot_filt + (1 - VELOCITY_FILTER) * th_dot_raw
             al_dot_filt = VELOCITY_FILTER * al_dot_filt + (1 - VELOCITY_FILTER) * al_dot_raw
             
@@ -143,11 +206,36 @@ def deploy():
 
             # Safety
             abs_theta = abs(theta)
+            theta_deg_abs = abs(theta_deg)
+            
+            # 1. Hard Kill for physically impossible angles (beyond 180 deg)
+            if theta_deg_abs > 180.0:
+                print(f"\nCRITICAL SAFETY KILL! Angle out of bounds: {theta_deg:.1f}")
+                break
+
+            # 2. Virtual bumper and Hit counting
             if abs_theta > SAFETY_LIMIT:
-                voltage = np.sign(theta) * (abs_theta - SAFETY_LIMIT) * 15.0 # Virtual spring
+                voltage = -np.sign(theta) * (abs_theta - SAFETY_LIMIT) * 15.0 # Virtual spring
+                
                 if abs_theta > SAFETY_KILL:
-                    print(f"Safety Kill! Theta: {theta_deg:.1f}")
-                    break
+                    if theta > 0:
+                        right_hits += 1
+                        print(f"\nHit RIGHT Stopper! ({right_hits}/{MAX_HITS})")
+                    else:
+                        left_hits += 1
+                        print(f"\nHit LEFT Stopper! ({left_hits}/{MAX_HITS})")
+                    
+                    if left_hits >= MAX_HITS or right_hits >= MAX_HITS:
+                        print(f"Safety Kill! Max hits reached. Theta: {theta_deg:.1f}")
+                        break
+                    
+                    # Bounce back and wait a tiny bit
+                    qube.setMotorVoltage(-np.sign(theta) * 6.0)
+                    time.sleep(0.2)
+                    qube.update() # Update to new position after bounce
+                    prev_theta = np.deg2rad(qube.getMotorAngle())
+                    th_dot_filt = 0 # Reset velocity estimation
+                    continue
 
             voltage = np.clip(voltage, -8.0, 8.0)
             qube.setMotorVoltage(voltage)
