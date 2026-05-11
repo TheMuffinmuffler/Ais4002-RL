@@ -61,8 +61,8 @@ POWER_GAIN = 1.0       # TUNED
 MOTOR_INVERT = 1.0     
 VELOCITY_FILTER = 0.4  # REACTIVE
 ACTION_FILTER = 0.5    # RESPONSIVE
-SAFETY_LIMIT = 2.0     # ~115 deg
-SAFETY_KILL = 2.27     # ~130 deg
+SAFETY_LIMIT = 1.3     # ~75 deg
+SAFETY_KILL = 1.6      # ~92 deg
 DEADBAND = 0.45        # Matches stiction in env
 # --------------------------
 
@@ -195,7 +195,7 @@ def deploy():
             
             dt = t_now - t_last
             t_last = t_now
-            if dt <= 0: dt = 0.02
+            if dt < 0.005: dt = 0.02 # Prevent division by zero/tiny dt
             
             # 4. Calculate Velocities with clipping
             th_dot_raw = np.clip((theta - prev_theta) / dt, -50, 50)
@@ -225,7 +225,7 @@ def deploy():
                 # SWING-UP MODE: Focus on momentum
                 pred_theta = theta + th_dot_filt * 0.02
                 pred_alpha = alpha + al_dot_filt * 0.02
-                current_power = 1.8 # INCREASED for swing-up
+                current_power = 2.5 # INCREASED for more energetic swing-up
                 current_deadband = 1.0 # INCREASED for stiction
 
             obs = np.array([
@@ -247,6 +247,7 @@ def deploy():
             # 7. SAFETY WALL
             abs_theta = np.abs(theta)
             theta_deg_abs = abs(theta_deg)
+            safety_v = 0.0
             
             # Hard Kill for physically impossible angles
             if theta_deg_abs > 180.0:
@@ -276,10 +277,11 @@ def deploy():
                 else:
                     overshoot = abs_theta - SAFETY_LIMIT
                     spring_k = 20.0 
-                    voltage = -np.sign(theta) * (overshoot * spring_k + 2.0)
+                    safety_v = -np.sign(theta) * (overshoot * spring_k + 2.0)
+                    voltage = safety_v
 
             # HARD LIMIT TO PROTECT MAGNETS
-            voltage = np.clip(voltage, -6.0, 6.0)
+            voltage = np.clip(voltage, -8.0, 8.0)
             # 7b. STALL DETECTION
             if abs(voltage) > 2.0 and abs(th_dot_filt) < 0.2:
                 stall_counter += 1

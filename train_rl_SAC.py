@@ -24,7 +24,7 @@ def main():
     os.makedirs("logs", exist_ok=True)
 
     # Configure logger
-    new_logger = configure("./logs/sac_v3/", ["stdout", "csv", "tensorboard"])
+    new_logger = configure("./logs/sac_v4/", ["stdout", "csv", "tensorboard"])
 
     device = get_device()
     print(f"Using device: {device}")

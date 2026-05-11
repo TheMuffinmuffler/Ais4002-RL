@@ -47,6 +47,12 @@ class QubeEnv(gym.Env):
         self._max_episode_steps = 500 
         self.hard_stop_angle = 2.37 # 136 degrees (measured)
 
+        # Hardware Emulation Parameters
+        self.vel_filter = 0.8  # Matches deploy scripts
+        self.act_filter = 0.5  # Matches deploy scripts
+        self.th_dot_filt = 0.0
+        self.al_dot_filt = 0.0
+
     def _apply_params(self, randomization_scale=0.1):
         if self.domain_randomization:
             self.m_r = self.m_r_nom * self.np_random.uniform(1-randomization_scale, 1+randomization_scale)
@@ -78,13 +84,14 @@ class QubeEnv(gym.Env):
         theta_q = np.round(theta * counts_per_rad) / counts_per_rad
         alpha_q = np.round(user_alpha * counts_per_rad) / counts_per_rad
         
-        theta_dot_n = theta_dot + self.np_random.normal(0, 0.02)
-        alpha_dot_n = alpha_dot + self.np_random.normal(0, 0.02)
+        # Latency/Filter emulation (EMA)
+        self.th_dot_filt = self.vel_filter * self.th_dot_filt + (1 - self.vel_filter) * theta_dot
+        self.al_dot_filt = self.vel_filter * self.al_dot_filt + (1 - self.vel_filter) * alpha_dot
 
         return np.array([
             np.sin(theta_q), np.cos(theta_q),
             np.sin(alpha_q), np.cos(alpha_q),
-            theta_dot_n, alpha_dot_n
+            self.th_dot_filt, self.al_dot_filt
         ], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
@@ -92,13 +99,17 @@ class QubeEnv(gym.Env):
         self._apply_params()
         self._step_count = 0
         self.prev_voltage = 0.0
+        self.th_dot_filt = 0.0
+        self.al_dot_filt = 0.0
         self.state = np.array([0, 0, 0, 0], dtype=np.float32) + self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
         return self._get_obs(), {}
 
     def step(self, action):
         self._step_count += 1
         requested_voltage = np.clip(action[0], -10.0, 10.0)
-        voltage = 0.7 * self.prev_voltage + 0.3 * requested_voltage
+        
+        # Filter emulation for motor ramp-up (EMA)
+        voltage = (1 - self.act_filter) * self.prev_voltage + self.act_filter * requested_voltage
 
         def dynamics(y, u):
             theta, alpha, th_dot, al_dot = y
@@ -145,17 +156,33 @@ class QubeEnv(gym.Env):
                 self.state[2] = 0.0
 
         theta, alpha, th_dot, al_dot = self.state
-        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2
-        height_bonus = (1.0 - np.cos(alpha)) * 10.0
         
-        theta_penalty = 5.0 * (theta**2)
-        # Heavy penalty starting 15 degrees before the hard stop
-        if abs(theta) > 2.1: 
-            theta_penalty += 200.0
+        # 1. Upright Bonus (Height + Precision)
+        # alpha=0 is DOWN internally, so cos(alpha) = -1 at bottom, 1 at top.
+        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 # ~0 when upright
+        height_reward = (1.0 - np.cos(alpha)) * 10.0 # ~20 at top, 0 at bottom
+        
+        # 2. Energy-Guided Swing-up
+        # We reward building energy to overcome gravity
+        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
+        E_target = 2 * self.m_p * self.g * self.l_p # Energy needed to reach the top
+        energy_error = abs(total_energy - E_target)
+        
+        # 3. Smooth Exponential Safety Spring
+        # Penalty grows exponentially as it approaches hard_stop_angle (2.37 rad / 136 deg)
+        # Begins to be felt significantly at ~1.5 rad (85 deg)
+        safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
+        
+        # 4. Precision & Effort
+        theta_penalty = 2.0 * theta**2
+        effort_penalty = 0.01 * voltage**2
+        velocity_penalty = 0.05 * (th_dot**2 + al_dot**2)
 
-        reward = height_bonus - (25.0 * dist_upright + theta_penalty + 0.1 * al_dot**2 + 0.1 * th_dot**2 + 0.05 * voltage**2)
-        if dist_upright < 0.05 and abs(theta) < 0.1:
-            reward += 10.0
+        # Composite Reward
+        reward = height_reward - (15.0 * dist_upright + 5.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty)
+        
+        if dist_upright < 0.1 and abs(theta) < 0.1:
+            reward += 15.0 # Stay-Up Bonus
 
         self.prev_voltage = voltage
         terminated = bool(abs(th_dot) > 100.0 or abs(al_dot) > 100.0)

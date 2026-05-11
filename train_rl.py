@@ -21,7 +21,7 @@ def train():
     os.makedirs("logs", exist_ok=True)
     
     # Configure logger to save to CSV
-    new_logger = configure("./logs/ppo_v3/", ["stdout", "csv", "tensorboard"])
+    new_logger = configure("./logs/ppo_v4/", ["stdout", "csv", "tensorboard"])
     
     # Force CPU for PPO
     device = "cpu"

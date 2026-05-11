@@ -25,7 +25,7 @@ def main():
     os.makedirs("logs", exist_ok=True)
 
     # Configure logger to save to CSV and Tensorboard
-    new_logger = configure("./logs/td3_v3/", ["stdout", "csv", "tensorboard"])
+    new_logger = configure("./logs/td3_v4/", ["stdout", "csv", "tensorboard"])
 
     device = get_device()
     print(f"Using device: {device}")

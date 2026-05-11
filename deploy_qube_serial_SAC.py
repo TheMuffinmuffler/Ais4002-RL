@@ -62,11 +62,11 @@ from control import COM_PORT
 # --- PERFORMANCE TUNING ---
 POWER_GAIN = 1.0       
 MOTOR_INVERT = 1.0     
-VELOCITY_FILTER = 0.4  
-ACTION_FILTER = 0.5    
-SAFETY_LIMIT = 2.0     # ~115 deg (Virtual bumper start)
-SAFETY_KILL = 2.27     # ~130 deg (Hard bounce/kill)
-DEADBAND = 0.45        # Matches stiction in env
+VELOCITY_FILTER = 0.8  # Increased from 0.2 for more smoothing (80% old / 20% new)
+ACTION_FILTER = 0.5    # Increased from 0.2 for more responsiveness (50% old / 50% new)
+SAFETY_LIMIT = 1.4     # ~80 deg
+SAFETY_KILL = 1.65     # ~95 deg
+DEADBAND = 0.45        
 # --------------------------
 
 class AsyncLogger:
@@ -175,7 +175,7 @@ def deploy():
             
             dt = t_now - t_last
             t_last = t_now
-            if dt <= 0: dt = 0.02
+            if dt < 0.005: dt = 0.02
             
             # Velocities with filtering and capping to prevent overflows
             th_dot_raw = np.clip((theta - prev_theta) / dt, -50, 50)
