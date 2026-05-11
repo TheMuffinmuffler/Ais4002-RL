@@ -16,30 +16,28 @@ def constrain(val, _min, _max):
 class QUBE:
     def __init__(self, port, baudrate):
         self.master = serial.Serial(
-            port=port, baudrate=baudrate, timeout=0.1, bytesize=serial.EIGHTBITS
+            port=port, baudrate=baudrate, timeout=0.001, bytesize=serial.EIGHTBITS
         )
+        self.master.reset_input_buffer()
+        self.master.reset_output_buffer()
+        
         self.rpm = 0
         self.voltage = 0
         self.current = 0
         self.motorAngle = 0
         self.pendulumAngle = 0
-        self.r = 0
-        self.g = 0
-        self.b = 0
-        self.writemask = [0, 0, 0, 0, 0, 0]
-        self.output = [
-            0,  # reset enc0 - 0
-            0,  # reset enc1 - 1
-            0,  # red msb - 2
-            0,  # red lsb - 3
-            0,  # green msb - 4
-            0,  # green lsb - 5
-            0,  # blue msb - 6
-            0,  # blue lsb - 7
-            0,  # motor msb - 8
-            0,  # motor lsb - 9
-        ]  # set motor
-        self.input = []
+        
+        # Initialize output with safe defaults
+        # 0: Reset Enc 0
+        # 1: Reset Enc 1
+        # 2-3: Red MSB/LSB
+        # 4-5: Green MSB/LSB
+        # 6-7: Blue MSB/LSB
+        # 8-9: Motor MSB/LSB (999 is 0V)
+        self.output = [0] * 10
+        self.setMotorSpeed(0) # Sets 8-9 to 999
+        self.setRGB(0, 0, 0)
+        
         self.startTime = time.time()
 
     # Getters
@@ -57,23 +55,17 @@ class QUBE:
 
     # Setters
     def resetMotorEncoder(self):
-        self.output[0] = 0x01
-        self.writemask[0] = RESET_ENCODER_0
+        self.output[0] = 1
 
     def resetPendulumEncoder(self):
-        self.output[1] = 0x01
-        self.writemask[1] = RESET_ENCODER_1
+        self.output[1] = 1
 
     def setMotorSpeed(self, speed):
+        # speed is -999 to 999
         speed = constrain(speed, -999, 999)
-        speed += 999
-
-        speed = int(speed)
-        speed_MSB = speed >> 8
-        speed_LSB = speed & 0xFF
-        self.output[8] = speed_MSB
-        self.output[9] = speed_LSB
-        self.writemask[5] = SET_MOTOR_SPEED
+        val = int(speed + 999)
+        self.output[8] = (val >> 8) & 0xFF
+        self.output[9] = val & 0xFF
 
     def setMotorVoltage(self, volts):
         self.voltage = min(24, max(-24, volts))
@@ -81,101 +73,74 @@ class QUBE:
         self.setMotorSpeed(speed)
 
     def setRGB(self, r, g, b):
-        self.r = constrain(r, 0, 999)
-        r_MSB = self.r >> 8
-        r_LSB = self.r & 0xFF
-        self.output[2] = r_MSB
-        self.output[3] = r_LSB
+        r = int(constrain(r, 0, 999))
+        g = int(constrain(g, 0, 999))
+        b = int(constrain(b, 0, 999))
+        
+        self.output[2] = (r >> 8) & 0xFF
+        self.output[3] = r & 0xFF
+        self.output[4] = (g >> 8) & 0xFF
+        self.output[5] = g & 0xFF
+        self.output[6] = (b >> 8) & 0xFF
+        self.output[7] = b & 0xFF
 
-        self.g = constrain(g, 0, 999)
-        g_MSB = self.g >> 8
-        g_LSB = self.g & 0xFF
-        self.output[4] = g_MSB
-        self.output[5] = g_LSB
-
-        self.b = constrain(b, 0, 999)
-        b_MSB = self.b >> 8
-        b_LSB = self.b & 0xFF
-        self.output[6] = b_MSB
-        self.output[7] = b_LSB
-
-        self.writemask[2] = SET_LED_RED
-        self.writemask[3] = SET_LED_GREEN
-        self.writemask[4] = SET_LED_BLUE
-
-    def readByte(self):
-        return int.from_bytes(self.master.read(), "little")
-
-    # Serial communication and bit manipulation
-    def receiveEncoderAngle(self):
-        rev_MSB = self.readByte()
-        rev_LSB = self.readByte()
-        ang_MSB = self.readByte()
-        ang_LSB = self.readByte()
+    def decodeEncoderAngle(self, data):
+        rev_MSB = data[0]
+        rev_LSB = data[1]
+        ang_MSB = data[2]
+        ang_LSB = data[3]
 
         dir = rev_MSB >> 7
-        revolutions = (rev_LSB) + (rev_MSB << 8) - (dir * 2**15)
+        revolutions = (rev_LSB) + ((rev_MSB & 0x7F) << 8)
+        
+        # If MSB is set, it's negative
+        if dir:
+            revolutions = -revolutions
 
         angleInt = ang_MSB * 2 + (ang_LSB >> 7)
         angleDec = (ang_LSB & 0b01111111) * 0.01
         angle = angleInt + angleDec
-
+        
         if dir:
-            revolutions = -revolutions
             angle = -angle
 
         return revolutions * 360.0 + angle
 
-    def receiveMotorRPM(self):
-        rpm_MSB = self.readByte()
-        rpm_LSB = self.readByte()
+    def decodeMotorRPM(self, data):
+        rpm_MSB = data[0]
+        rpm_LSB = data[1]
         dir = rpm_MSB >> 7
-        rpm = ((rpm_MSB - (dir << 7)) << 8) | rpm_LSB
+        rpm = ((rpm_MSB & 0x7F) << 8) | rpm_LSB
         if dir:
             rpm = -rpm
         return rpm
 
-    def receiveMotorCurrent(self):
-        current_MSB = self.readByte()
-        current_LSB = self.readByte()
-
+    def decodeMotorCurrent(self, data):
+        current_MSB = data[0]
+        current_LSB = data[1]
         current = (current_MSB << 8) | current_LSB
         return current
 
-    def getLogData(self, motorSetpoint, pendulumSetpoint, rpm_target):
-        return [
-            self.motorAngle,
-            motorSetpoint,
-            self.pendulumAngle,
-            pendulumSetpoint,
-            self.rpm,
-            rpm_target,
-            self.voltage,
-            self.current,
-        ]
-
-    def getPlotData(self, motorSetpoint, pendulumSetpoint, rpm_target):
-        return [
-            self.motorAngle,  # Plot 1 pink
-            motorSetpoint,  # Plot 1 white
-            self.pendulumAngle,  # Plot 2 pink
-            pendulumSetpoint,  # Plot 2 white
-            self.rpm,  # Plot 3 pink
-            rpm_target,  # Plot 3 white
-            self.voltage,  # Plot 4 pink
-            self.current,
-            time.time() - self.startTime,
-        ]
-
-    # Main update loop
     def update(self):
-        data = []
-        for byte in self.output:
-            data.append(byte)
-        self.master.write(bytearray(data))
-        self.output = [0] * 10
-
-        self.motorAngle = self.receiveEncoderAngle()
-        self.pendulumAngle = self.receiveEncoderAngle()
-        self.rpm = self.receiveMotorRPM()
-        self.current = self.receiveMotorCurrent()
+        # 1. Send 10 bytes of command
+        # To help with sync, we could add a header byte here, 
+        # but the Arduino sketch needs to match.
+        self.master.write(bytearray(self.output))
+        
+        # Clear reset flags after sending
+        self.output[0] = 0
+        self.output[1] = 0
+        
+        # 2. Read 12 bytes of response
+        raw_data = self.master.read(12)
+        
+        if len(raw_data) == 12:
+            self.motorAngle = self.decodeEncoderAngle(raw_data[0:4])
+            self.pendulumAngle = self.decodeEncoderAngle(raw_data[4:8])
+            self.rpm = self.decodeMotorRPM(raw_data[8:10])
+            self.current = self.decodeMotorCurrent(raw_data[10:12])
+        else:
+            # We might be out of sync. If we keep getting wrong lengths, 
+            # we should flush.
+            if len(raw_data) > 0:
+                self.master.reset_input_buffer()

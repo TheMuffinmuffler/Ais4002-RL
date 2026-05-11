@@ -71,7 +71,7 @@ void QUBE::setErrorLight()
         LED_ON = !LED_ON;
     }
 
-    int r, g, b = 0;
+    int r = 0, g = 0, b = 0;
 
     if (stallDetected)
     {
@@ -134,17 +134,17 @@ void QUBE::resetPendulumEncoder()
 void QUBE::setMotorEncoder(int count)
 {
     output[2] |= B00100000; // Adds setEncoder0 to write mask
-    output[9] = count >> 16;
-    output[10] = (count << 16) >> 24;
-    output[11] = (count << 24) >> 32;
+    output[9] = (count >> 16) & 0xFF;
+    output[10] = (count >> 8) & 0xFF;
+    output[11] = count & 0xFF;
 }
 
 void QUBE::setPendulumEncoder(int count)
 {
     output[2] |= B01000000; // Adds setEncoder1 to write mask
-    output[12] = count >> 16;
-    output[13] = (count << 16) >> 24;
-    output[14] = (count << 24) >> 32;
+    output[12] = (count >> 16) & 0xFF;
+    output[13] = (count >> 8) & 0xFF;
+    output[14] = count & 0xFF;
 }
 
 void QUBE::begin()
