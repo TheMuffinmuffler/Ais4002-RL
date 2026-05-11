@@ -161,25 +161,27 @@ class QubeEnv(gym.Env):
         # alpha=0 is DOWN internally, so cos(alpha) = -1 at bottom, 1 at top.
         dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 # ~0 when upright
         height_reward = (1.0 - np.cos(alpha)) * 10.0 # ~20 at top, 0 at bottom
-        
         # 2. Energy-Guided Swing-up
+        # Potential Energy (E_p) + Kinetic Energy (E_k)
         # We reward building energy to overcome gravity
         total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
         E_target = 2 * self.m_p * self.g * self.l_p # Energy needed to reach the top
         energy_error = abs(total_energy - E_target)
-        
+
         # 3. Smooth Exponential Safety Spring
         # Penalty grows exponentially as it approaches hard_stop_angle (2.37 rad / 136 deg)
         # Begins to be felt significantly at ~1.5 rad (85 deg)
         safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
-        
+
         # 4. Precision & Effort
         theta_penalty = 2.0 * theta**2
         effort_penalty = 0.01 * voltage**2
         velocity_penalty = 0.05 * (th_dot**2 + al_dot**2)
 
         # Composite Reward
-        reward = height_reward - (15.0 * dist_upright + 5.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty)
+        # BUMPED energy_error weight to 10.0
+        reward = height_reward - (15.0 * dist_upright + 10.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty)
+
         
         if dist_upright < 0.1 and abs(theta) < 0.1:
             reward += 15.0 # Stay-Up Bonus

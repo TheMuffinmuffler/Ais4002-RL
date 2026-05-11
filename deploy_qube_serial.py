@@ -59,8 +59,8 @@ from control import COM_PORT
 # --- PERFORMANCE TUNING ---
 POWER_GAIN = 1.0       # TUNED
 MOTOR_INVERT = 1.0     
-VELOCITY_FILTER = 0.4  # REACTIVE
-ACTION_FILTER = 0.5    # RESPONSIVE
+VELOCITY_FILTER = 0.8  # Matches qube_env.py
+ACTION_FILTER = 0.2    # Increased smoothing (Matches SAC/TD3 fixes)
 SAFETY_LIMIT = 1.3     # ~75 deg
 SAFETY_KILL = 1.6      # ~92 deg
 DEADBAND = 0.45        # Matches stiction in env
@@ -84,6 +84,7 @@ class AsyncLogger:
                 try:
                     data = self.queue.get(timeout=0.1)
                     writer.writerow(data)
+                    f.flush() # CRITICAL: Allows live analysis while script is running
                 except queue.Empty:
                     continue
 
@@ -167,10 +168,10 @@ def deploy():
     
     left_hits = 0
     right_hits = 0
-    MAX_HITS = 5
+    MAX_HITS = 20
     
     stall_counter = 0
-    STALL_LIMIT = 50 # 1.0 second at 50Hz
+    STALL_LIMIT = 75 # 1.5 seconds at 50Hz (More forgiving)
     
     # HYSTERESIS AND STATE
     in_balance_mode = False
@@ -217,20 +218,17 @@ def deploy():
 
             if in_balance_mode:
                 # BALANCE MODE: Focus on high precision
-                pred_theta = theta + th_dot_filt * 0.05
-                pred_alpha = alpha + al_dot_filt * 0.02
                 current_power = 1.2 # Slightly more power to hold balance
                 current_deadband = 0.2
             else:
                 # SWING-UP MODE: Focus on momentum
-                pred_theta = theta + th_dot_filt * 0.02
-                pred_alpha = alpha + al_dot_filt * 0.02
-                current_power = 2.5 # INCREASED for more energetic swing-up
+                current_power = 2.5 # AMPLIFIED: PPO is cautious, so we boost its authority
                 current_deadband = 1.0 # INCREASED for stiction
 
+            # Obs matches qube_env.py exactly: [sin_th, cos_th, sin_al, cos_al, th_dot_filt, al_dot_filt]
             obs = np.array([
-                np.sin(pred_theta), np.cos(pred_theta),
-                np.sin(pred_alpha), np.cos(pred_alpha),
+                np.sin(theta), np.cos(theta),
+                np.sin(alpha), np.cos(alpha),
                 th_dot_filt, al_dot_filt
             ], dtype=np.float32)
 
@@ -268,11 +266,12 @@ def deploy():
                         break
                     
                     # Bounce back
-                    qube.setMotorVoltage(-np.sign(theta) * 6.0)
+                    qube.setMotorVoltage(-np.sign(theta) * 4.0)
                     time.sleep(0.2)
                     qube.update()
                     prev_theta = np.deg2rad(qube.getMotorAngle())
                     th_dot_filt = 0
+                    t_last = time.time() # CRITICAL: Reset timing after sleep
                     continue
                 else:
                     overshoot = abs_theta - SAFETY_LIMIT
@@ -304,7 +303,6 @@ def deploy():
             step_count += 1
 
             # --- LOGGING ---
-            # Columns: time, dt, theta, alpha, th_dot, al_dot, raw_th_dot, raw_al_dot, voltage, raw_action, safety_v, current, mode
             logger.log([
                 time.time() - t_start, dt, theta_deg, alpha_deg, 
                 th_dot_filt, al_dot_filt, th_dot_raw, al_dot_raw,
@@ -338,3 +336,4 @@ def deploy():
 
 if __name__ == "__main__":
     deploy()
+deploy()

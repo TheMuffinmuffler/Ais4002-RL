@@ -87,6 +87,7 @@ class AsyncLogger:
                 try:
                     data = self.queue.get(timeout=0.1)
                     writer.writerow(data)
+                    f.flush() # CRITICAL: Allows live analysis while script is running
                 except queue.Empty:
                     continue
 
@@ -154,7 +155,7 @@ def deploy():
     
     left_hits = 0
     right_hits = 0
-    MAX_HITS = 5
+    MAX_HITS = 20
 
     try:
         while True:
@@ -224,11 +225,12 @@ def deploy():
                         break
                     
                     # Bounce back and wait a tiny bit
-                    qube.setMotorVoltage(-np.sign(theta) * 6.0)
+                    qube.setMotorVoltage(-np.sign(theta) * 4.0)
                     time.sleep(0.2)
                     qube.update() # Update to new position after bounce
                     prev_theta = np.deg2rad(qube.getMotorAngle())
                     th_dot_filt = 0 # Reset velocity estimation
+                    t_last = time.time() # Reset timing
                     continue
 
             voltage = np.clip(voltage, -8.0, 8.0)
