@@ -54,16 +54,16 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.logger import configure
 
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from qube_env import QubeEnv
 from train_rl import SAC_TOTAL_STEPS, N_ENVS, LEARNING_RATE
 
-# Training steps for fresh start on MacBook
+# Training steps for fresh start
 RETRAIN_STEPS = 500000 
-N_ENVS_LAPTOP = 4
+N_ENVS_LAPTOP = 16
 
 def get_device():
-    # Force CPU for Intel MacBook compatibility
-    return "cpu"
+    return "cuda"
 
 def main():
     os.makedirs("models", exist_ok=True)
@@ -74,27 +74,39 @@ def main():
     device = get_device()
     print(f"Using device: {device}")
 
-    env = make_vec_env(lambda: QubeEnv(domain_randomization=True), n_envs=N_ENVS_LAPTOP)
+    # Use SubprocVecEnv to force true multi-core parallelization
+    env = make_vec_env(
+        lambda: QubeEnv(domain_randomization=True), 
+        n_envs=N_ENVS_LAPTOP,
+        vec_env_cls=SubprocVecEnv
+    )
     eval_env = Monitor(QubeEnv(domain_randomization=False))
 
-    # Fresh start: removed loading logic to ensure a clean policy
-    print("Starting FRESH SAC training...")
-    model = SAC(
-        policy="MlpPolicy",
-        env=env,
-        learning_rate=LEARNING_RATE,
-        buffer_size=300_000,
-        learning_starts=5000,
-        batch_size=256,
-        tau=0.005,
-        gamma=0.99,
-        train_freq=1,
-        gradient_steps=1,
-        ent_coef="auto",
-        target_update_interval=1,
-        verbose=1,
-        device=device
-    )
+    model_path = "models/qube_sac_final.zip"
+    
+    # Force FRESH training because the coordinate system flipped (physics changed)
+    model = None
+
+    if model is None:
+        print("Starting FRESH SAC training...")
+        policy_kwargs = dict(net_arch=[400, 300])
+        model = SAC(
+            policy="MlpPolicy",
+            env=env,
+            learning_rate=3e-4,
+            buffer_size=1_000_000,
+            learning_starts=20000,
+            batch_size=1024,
+            tau=0.005,
+            gamma=0.99,
+            train_freq=16,
+            gradient_steps=16,
+            ent_coef=0.1,
+            target_update_interval=1,
+            policy_kwargs=policy_kwargs,
+            verbose=1,
+            device=device
+        )
     
     model.set_logger(new_logger)
 
@@ -123,7 +135,7 @@ def main():
     model.save("models/qube_sac_final")
     env.close()
     eval_env.close()
-    print("Retraining finished!")
+    print("Training finished!")
 
 if __name__ == "__main__":
     main()

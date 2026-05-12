@@ -1,7 +1,7 @@
 from PID import *
 
 # Arduino COM port
-COM_PORT = "/dev/cu.usbmodem157525801"
+COM_PORT = "COM3"
 
 # Using mac?
 USING_MAC = False

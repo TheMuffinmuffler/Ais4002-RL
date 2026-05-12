@@ -56,9 +56,9 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
 
 # --- MASTER TRAINING CONFIGURATION ---
-PPO_TOTAL_STEPS = 200000  # Reduced for quick retraining on MacBook
-TD3_TOTAL_STEPS = 100000
-SAC_TOTAL_STEPS = 100000
+PPO_TOTAL_STEPS = 1000000  
+TD3_TOTAL_STEPS = 500000
+SAC_TOTAL_STEPS = 1000000
 N_ENVS = 4 # Reduced for laptop thermal management
 LEARNING_RATE = 2e-4
 # -------------------------------------
@@ -87,10 +87,10 @@ def train():
         "action_space": eval_env.action_space
     }
 
+    # Now that we have the correct obs space (7), we CAN load the model we just saved
     if os.path.exists(model_path):
-        print(f"Loading existing model {model_path} for retraining...")
+        print(f"Resuming PPO from {model_path}...")
         model = PPO.load(model_path, env=env, device=device, custom_objects=custom_objects)
-        model.learning_rate = LEARNING_RATE # Reset LR for fine-tuning
     else:
         print("Starting fresh PPO training...")
         model = PPO(

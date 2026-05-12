@@ -14,11 +14,7 @@ from train_rl import TD3_TOTAL_STEPS, N_ENVS, LEARNING_RATE
 
 
 def get_device():
-    if torch.cuda.is_available():
-        return "cuda"
-    elif torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    return "cuda"
 
 
 def main():
@@ -39,24 +35,36 @@ def main():
         sigma=0.1 * np.ones(n_actions)
     )
 
-    model = TD3(
-        policy="MlpPolicy",
-        env=env,
-        learning_rate=LEARNING_RATE,
-        buffer_size=300_000,
-        learning_starts=10_000,
-        batch_size=256,
-        tau=0.005,
-        gamma=0.99,
-        train_freq=50,
-        gradient_steps=50,
-        action_noise=action_noise,
-        policy_delay=2,
-        target_policy_noise=0.05,
-        target_noise_clip=0.1,
-        verbose=1,
-        device=device
-    )
+    model_path = "models/qube_td3_final.zip"
+
+    custom_objects = {
+        "observation_space": eval_env.observation_space,
+        "action_space": eval_env.action_space
+    }
+
+    if False: # Forced fresh start due to obs space change
+        print(f"Loading existing model {model_path} for retraining...")
+        model = TD3.load(model_path, env=env, device=device, custom_objects=custom_objects)
+    else:
+        print("Starting FRESH TD3 training (Obs space changed)...")
+        model = TD3(
+            policy="MlpPolicy",
+            env=env,
+            learning_rate=LEARNING_RATE,
+            buffer_size=300_000,
+            learning_starts=10_000,
+            batch_size=256,
+            tau=0.005,
+            gamma=0.99,
+            train_freq=50,
+            gradient_steps=50,
+            action_noise=action_noise,
+            policy_delay=2,
+            target_policy_noise=0.05,
+            target_noise_clip=0.1,
+            verbose=1,
+            device=device
+        )
     model.set_logger(new_logger)
 
     checkpoint_callback = CheckpointCallback(

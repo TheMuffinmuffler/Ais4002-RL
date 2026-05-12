@@ -66,6 +66,10 @@ class QubeEnv(gym.Env):
             # Motor constant randomization (thermal/strength variation)
             self.kt = self.kt_nom * self.np_random.uniform(0.9, 1.1)
             
+            # Randomized Tilt: 0 to 5 degrees (0 to 0.087 rad)
+            # This simulates a non-level table surface
+            self.tilt = self.np_random.uniform(-0.087, 0.087)
+            
             self.J_r = self.J_r_nom * (self.m_r / self.m_r_nom) * (self.L_r / self.L_r_nom)**2
             self.J_p = self.J_p_nom * (self.m_p / self.m_p_nom) * ((self.l_p*2) / self.L_p_nom)**2
         else:
@@ -79,6 +83,7 @@ class QubeEnv(gym.Env):
             self.J_p = self.J_p_nom
             self.stiction = self.stiction_nom
             self.kt = self.kt_nom
+            self.tilt = 0.0
 
     def _get_obs(self):
         theta, alpha, theta_dot, alpha_dot = self.state
@@ -94,7 +99,7 @@ class QubeEnv(gym.Env):
         self.th_dot_filt = self.vel_filter * self.th_dot_filt + (1 - self.vel_filter) * theta_dot
         self.al_dot_filt = self.vel_filter * self.al_dot_filt + (1 - self.vel_filter) * alpha_dot
 
-        # alpha=0 is TOP, so cos(alpha)=1 is TOP
+        # alpha=pi is TOP (upright), alpha=0 is BOTTOM (hanging)
         return np.array([
             np.sin(theta_q), np.cos(theta_q),
             np.sin(alpha_q), np.cos(alpha_q),
@@ -111,14 +116,9 @@ class QubeEnv(gym.Env):
         self.th_dot_filt = 0.0
         self.al_dot_filt = 0.0
         
-        # --- Hybrid Reset Randomization ---
-        rand = self.np_random.random()
-        if rand < 0.5:
-            alpha_init = np.pi
-        elif rand < 0.7:
-            alpha_init = 0.0
-        else:
-            alpha_init = self.np_random.uniform(low=-np.pi, high=np.pi)
+        # --- Physical Reset: 100% Randomized Bottom-ish ---
+        # 0 is BOTTOM. Start +/- 0.5 to give it a "running start"
+        alpha_init = 0.0 + self.np_random.uniform(-0.5, 0.5)
 
         self.state = np.array([0, alpha_init, 0, 0], dtype=np.float32) + \
                      self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
@@ -129,12 +129,10 @@ class QubeEnv(gym.Env):
         self._step_count += 1
         
         # --- Control Latency Emulation (1-step delay) ---
-        # The chosen action is stored, and the PREVIOUSLY stored action is used.
-        # This simulates the ~20ms USB/Hardware delay.
         current_requested_voltage = self.delayed_action
         self.delayed_action = np.clip(action[0], -10.0, 10.0)
         
-        # Jerk Penalty: Penalize rapid changes in voltage to ensure smoothness
+        # Jerk Penalty: Penalize rapid changes in voltage
         jerk_penalty = 0.01 * (self.delayed_action - self.prev_voltage)**2
 
         voltage = (1 - self.act_filter) * self.prev_voltage + self.act_filter * current_requested_voltage
@@ -161,7 +159,8 @@ class QubeEnv(gym.Env):
             c22 = self.D_p
             C = np.array([[c11, c12], [c21, c22]])
             
-            G = np.array([0, -self.m_p * self.g * self.l_p * np.sin(alpha)])
+            # Restorative force towards bottom (alpha=0)
+            G = np.array([0, self.m_p * self.g * self.l_p * np.sin(alpha + self.tilt)])
             rhs = np.array([tau, 0]) - C @ np.array([th_dot, al_dot]) - G
             q_ddot = np.linalg.solve(M, rhs)
             return np.array([th_dot, al_dot, q_ddot[0], q_ddot[1]])
@@ -178,37 +177,49 @@ class QubeEnv(gym.Env):
             
             if self.state[0] > self.hard_stop_angle:
                 self.state[0] = self.hard_stop_angle
-                self.state[2] = -0.3 * self.state[2] # Bouncy collision
+                self.state[2] = -0.3 * self.state[2] 
             elif self.state[0] < -self.hard_stop_angle:
                 self.state[0] = -self.hard_stop_angle
-                self.state[2] = -0.3 * self.state[2] # Bouncy collision
+                self.state[2] = -0.3 * self.state[2]
+
+        # --- Random Perturbation (Hitting the pendulum) ---
+        if self.domain_randomization and np.cos(self.state[1]) < -0.8:
+            if self.np_random.random() < 0.01: 
+                hit_velocity = self.np_random.uniform(-5.0, 5.0) 
+                self.state[3] += hit_velocity
 
         theta, alpha, th_dot, al_dot = self.state
-        dist_upright = (np.cos(alpha) - 1)**2 + (np.sin(alpha))**2 
-        height_reward = 10.0 * (np.cos(alpha) + 1.0)**2 
         
-        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 + np.cos(alpha))
+        # Upright Target: alpha = pi (cos = -1)
+        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 
+        height_reward = 20.0 * (1.0 - np.cos(alpha))**2 
+        
+        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
         E_target = 2 * self.m_p * self.g * self.l_p 
-        energy_error = abs(total_energy - E_target)
+        energy_gain = 20.0 * min(total_energy, E_target)
+
+        swingup_bonus = 0.0
+        if np.cos(alpha) < 0.0: # Above horizontal
+            swingup_bonus = 50.0
 
         safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
         theta_penalty = 5.0 * theta**2
         effort_penalty = 0.005 * voltage**2
-        velocity_penalty = 0.01 * th_dot**2 + 0.01 * al_dot**2
+        velocity_penalty = 0.005 * th_dot**2 + 0.005 * al_dot**2
         
-        if np.cos(alpha) > 0.8:
+        if np.cos(alpha) < -0.8:
             velocity_penalty += 0.1 * al_dot**2
 
-        centering_reward = 5.0 * (1.0 - (theta / self.hard_stop_angle)**2)
+        centering_reward = 10.0 * (1.0 - (theta / self.hard_stop_angle)**2)
 
-        reward = height_reward + centering_reward - (20.0 * dist_upright + 500.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty + jerk_penalty)
+        reward = height_reward + centering_reward + energy_gain + swingup_bonus - (1.0 * dist_upright + safety_penalty + theta_penalty + velocity_penalty + effort_penalty + jerk_penalty)
         
-        if np.cos(alpha) > 0.5: 
-            proximity = (np.cos(alpha) - 0.5) / 0.5
+        if np.cos(alpha) < -0.5: # Top half
+            proximity = (-np.cos(alpha) - 0.5) / 0.5
             stability = np.exp(-2.0 * abs(theta)) * np.exp(-0.1 * (abs(th_dot) + abs(al_dot)))
             reward += 100.0 * proximity * stability
 
-        if np.cos(alpha) > 0.95:
+        if np.cos(alpha) < -0.95: # Balance zone
             reward += 20.0
 
         self.prev_voltage = voltage
