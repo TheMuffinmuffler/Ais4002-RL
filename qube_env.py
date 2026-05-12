@@ -1,6 +1,7 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
+from config import VELOCITY_FILTER, ACTION_FILTER, STICTION_VOLTAGE, HARD_STOP_RAD, ENCODER_RES
 
 class QubeEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 50}
@@ -27,29 +28,25 @@ class QubeEnv(gym.Env):
         self.km = 0.042    # V/(rad/s)
 
         # Hardware imperfections
-        self.stiction_nom = 0.45 # Volts
-        self.encoder_res = 2048   # Counts per 360 deg
+        self.stiction_nom = STICTION_VOLTAGE
+        self.encoder_res = ENCODER_RES
         
         self._apply_params()
 
-        # Action: Voltage applied to the motor [-10, 10] V
         self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
-
-        # State: [sin_th, cos_th, sin_al, cos_al, th_dot, al_dot]
-        # Note: alpha=0 is UPRIGHT
         high = np.array([1.0, 1.0, 1.0, 1.0, np.inf, np.inf], dtype=np.float32)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
-        self.state = None # [theta, alpha, theta_dot, alpha_dot] where alpha=0 is DOWN internally
-        self.dt = 0.02  # 50 Hz
+        self.state = None
+        self.dt = 0.02 
         self.render_mode = render_mode
         self._step_count = 0
         self._max_episode_steps = 500 
-        self.hard_stop_angle = 2.37 # 136 degrees (measured)
+        self.hard_stop_angle = HARD_STOP_RAD
 
-        # Hardware Emulation Parameters
-        self.vel_filter = 0.8  # Matches deploy scripts
-        self.act_filter = 0.5  # Matches deploy scripts
+        # Hardware Emulation Parameters (from config)
+        self.vel_filter = VELOCITY_FILTER
+        self.act_filter = ACTION_FILTER
         self.th_dot_filt = 0.0
         self.al_dot_filt = 0.0
 
@@ -84,7 +81,6 @@ class QubeEnv(gym.Env):
         theta_q = np.round(theta * counts_per_rad) / counts_per_rad
         alpha_q = np.round(user_alpha * counts_per_rad) / counts_per_rad
         
-        # Latency/Filter emulation (EMA)
         self.th_dot_filt = self.vel_filter * self.th_dot_filt + (1 - self.vel_filter) * theta_dot
         self.al_dot_filt = self.vel_filter * self.al_dot_filt + (1 - self.vel_filter) * alpha_dot
 
@@ -107,8 +103,6 @@ class QubeEnv(gym.Env):
     def step(self, action):
         self._step_count += 1
         requested_voltage = np.clip(action[0], -10.0, 10.0)
-        
-        # Filter emulation for motor ramp-up (EMA)
         voltage = (1 - self.act_filter) * self.prev_voltage + self.act_filter * requested_voltage
 
         def dynamics(y, u):
@@ -156,35 +150,24 @@ class QubeEnv(gym.Env):
                 self.state[2] = 0.0
 
         theta, alpha, th_dot, al_dot = self.state
+        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 
+        height_reward = (1.0 - np.cos(alpha)) * 10.0 
         
-        # 1. Upright Bonus (Height + Precision)
-        # alpha=0 is DOWN internally, so cos(alpha) = -1 at bottom, 1 at top.
-        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 # ~0 when upright
-        height_reward = (1.0 - np.cos(alpha)) * 10.0 # ~20 at top, 0 at bottom
-        # 2. Energy-Guided Swing-up
-        # Potential Energy (E_p) + Kinetic Energy (E_k)
-        # We reward building energy to overcome gravity
         total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
-        E_target = 2 * self.m_p * self.g * self.l_p # Energy needed to reach the top
+        E_target = 2 * self.m_p * self.g * self.l_p 
         energy_error = abs(total_energy - E_target)
 
-        # 3. Smooth Exponential Safety Spring
-        # Penalty grows exponentially as it approaches hard_stop_angle (2.37 rad / 136 deg)
-        # Begins to be felt significantly at ~1.5 rad (85 deg)
+        # Exponential Safety Spring (based on config HARD_STOP_RAD)
         safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
 
-        # 4. Precision & Effort
         theta_penalty = 2.0 * theta**2
         effort_penalty = 0.01 * voltage**2
         velocity_penalty = 0.05 * (th_dot**2 + al_dot**2)
 
-        # Composite Reward
-        # BUMPED energy_error weight to 10.0
         reward = height_reward - (15.0 * dist_upright + 10.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty)
-
         
         if dist_upright < 0.1 and abs(theta) < 0.1:
-            reward += 15.0 # Stay-Up Bonus
+            reward += 15.0 
 
         self.prev_voltage = voltage
         terminated = bool(abs(th_dot) > 100.0 or abs(al_dot) > 100.0)
