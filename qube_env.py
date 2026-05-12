@@ -24,7 +24,7 @@ class QubeEnv(gym.Env):
         
         self.g = 9.81
         self.Rm = 8.4      # Ohms
-        self.kt = 0.042    # N.m/A
+        self.kt_nom = 0.042    # N.m/A
         self.km = 0.042    # V/(rad/s)
 
         # Hardware imperfections
@@ -34,7 +34,8 @@ class QubeEnv(gym.Env):
         self._apply_params()
 
         self.action_space = spaces.Box(low=-10.0, high=10.0, shape=(1,), dtype=np.float32)
-        high = np.array([1.0, 1.0, 1.0, 1.0, np.inf, np.inf], dtype=np.float32)
+        # Observation space: sin(th), cos(th), sin(al), cos(al), th_dot, al_dot, prev_voltage
+        high = np.array([1.0, 1.0, 1.0, 1.0, np.inf, np.inf, 1.0], dtype=np.float32)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
         self.state = None
@@ -49,6 +50,8 @@ class QubeEnv(gym.Env):
         self.act_filter = ACTION_FILTER
         self.th_dot_filt = 0.0
         self.al_dot_filt = 0.0
+        self.prev_voltage = 0.0
+        self.delayed_action = 0.0
 
     def _apply_params(self, randomization_scale=0.1):
         if self.domain_randomization:
@@ -56,9 +59,12 @@ class QubeEnv(gym.Env):
             self.L_r = self.L_r_nom * self.np_random.uniform(1-randomization_scale, 1+randomization_scale)
             self.m_p = self.m_p_nom * self.np_random.uniform(1-randomization_scale, 1+randomization_scale)
             self.l_p = self.l_p_nom * self.np_random.uniform(1-randomization_scale, 1+randomization_scale)
-            self.D_r = self.D_r_nom * self.np_random.uniform(0.5, 2.0)
-            self.D_p = self.D_p_nom * self.np_random.uniform(0.5, 2.0)
-            self.stiction = self.stiction_nom * self.np_random.uniform(0.8, 1.2)
+            # Increased randomization for damping to cover various hardware conditions
+            self.D_r = self.D_r_nom * self.np_random.uniform(0.5, 3.0)
+            self.D_p = self.D_p_nom * self.np_random.uniform(0.5, 3.0)
+            self.stiction = self.stiction_nom * self.np_random.uniform(0.7, 1.3)
+            # Motor constant randomization (thermal/strength variation)
+            self.kt = self.kt_nom * self.np_random.uniform(0.9, 1.1)
             
             self.J_r = self.J_r_nom * (self.m_r / self.m_r_nom) * (self.L_r / self.L_r_nom)**2
             self.J_p = self.J_p_nom * (self.m_p / self.m_p_nom) * ((self.l_p*2) / self.L_p_nom)**2
@@ -72,22 +78,28 @@ class QubeEnv(gym.Env):
             self.J_r = self.J_r_nom
             self.J_p = self.J_p_nom
             self.stiction = self.stiction_nom
+            self.kt = self.kt_nom
 
     def _get_obs(self):
         theta, alpha, theta_dot, alpha_dot = self.state
-        user_alpha = alpha - np.pi
         
         counts_per_rad = self.encoder_res / (2 * np.pi)
         theta_q = np.round(theta * counts_per_rad) / counts_per_rad
-        alpha_q = np.round(user_alpha * counts_per_rad) / counts_per_rad
+        alpha_q = np.round(alpha * counts_per_rad) / counts_per_rad
         
+        # --- Real-world Sensor Noise ---
+        theta_q += self.np_random.normal(0, 0.001)
+        alpha_q += self.np_random.normal(0, 0.001)
+
         self.th_dot_filt = self.vel_filter * self.th_dot_filt + (1 - self.vel_filter) * theta_dot
         self.al_dot_filt = self.vel_filter * self.al_dot_filt + (1 - self.vel_filter) * alpha_dot
 
+        # alpha=0 is TOP, so cos(alpha)=1 is TOP
         return np.array([
             np.sin(theta_q), np.cos(theta_q),
             np.sin(alpha_q), np.cos(alpha_q),
-            self.th_dot_filt, self.al_dot_filt
+            self.th_dot_filt, self.al_dot_filt,
+            self.prev_voltage / 10.0 # Normalized prev_voltage for state context
         ], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
@@ -95,15 +107,37 @@ class QubeEnv(gym.Env):
         self._apply_params()
         self._step_count = 0
         self.prev_voltage = 0.0
+        self.delayed_action = 0.0
         self.th_dot_filt = 0.0
         self.al_dot_filt = 0.0
-        self.state = np.array([0, 0, 0, 0], dtype=np.float32) + self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
+        
+        # --- Hybrid Reset Randomization ---
+        rand = self.np_random.random()
+        if rand < 0.5:
+            alpha_init = np.pi
+        elif rand < 0.7:
+            alpha_init = 0.0
+        else:
+            alpha_init = self.np_random.uniform(low=-np.pi, high=np.pi)
+
+        self.state = np.array([0, alpha_init, 0, 0], dtype=np.float32) + \
+                     self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
+        
         return self._get_obs(), {}
 
     def step(self, action):
         self._step_count += 1
-        requested_voltage = np.clip(action[0], -10.0, 10.0)
-        voltage = (1 - self.act_filter) * self.prev_voltage + self.act_filter * requested_voltage
+        
+        # --- Control Latency Emulation (1-step delay) ---
+        # The chosen action is stored, and the PREVIOUSLY stored action is used.
+        # This simulates the ~20ms USB/Hardware delay.
+        current_requested_voltage = self.delayed_action
+        self.delayed_action = np.clip(action[0], -10.0, 10.0)
+        
+        # Jerk Penalty: Penalize rapid changes in voltage to ensure smoothness
+        jerk_penalty = 0.01 * (self.delayed_action - self.prev_voltage)**2
+
+        voltage = (1 - self.act_filter) * self.prev_voltage + self.act_filter * current_requested_voltage
 
         def dynamics(y, u):
             theta, alpha, th_dot, al_dot = y
@@ -144,30 +178,38 @@ class QubeEnv(gym.Env):
             
             if self.state[0] > self.hard_stop_angle:
                 self.state[0] = self.hard_stop_angle
-                self.state[2] = 0.0
+                self.state[2] = -0.3 * self.state[2] # Bouncy collision
             elif self.state[0] < -self.hard_stop_angle:
                 self.state[0] = -self.hard_stop_angle
-                self.state[2] = 0.0
+                self.state[2] = -0.3 * self.state[2] # Bouncy collision
 
         theta, alpha, th_dot, al_dot = self.state
-        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 
-        height_reward = (1.0 - np.cos(alpha)) * 10.0 
+        dist_upright = (np.cos(alpha) - 1)**2 + (np.sin(alpha))**2 
+        height_reward = 10.0 * (np.cos(alpha) + 1.0)**2 
         
-        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
+        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 + np.cos(alpha))
         E_target = 2 * self.m_p * self.g * self.l_p 
         energy_error = abs(total_energy - E_target)
 
-        # Exponential Safety Spring (based on config HARD_STOP_RAD)
         safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
-
-        theta_penalty = 2.0 * theta**2
-        effort_penalty = 0.01 * voltage**2
-        velocity_penalty = 0.05 * (th_dot**2 + al_dot**2)
-
-        reward = height_reward - (15.0 * dist_upright + 10.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty)
+        theta_penalty = 5.0 * theta**2
+        effort_penalty = 0.005 * voltage**2
+        velocity_penalty = 0.01 * th_dot**2 + 0.01 * al_dot**2
         
-        if dist_upright < 0.1 and abs(theta) < 0.1:
-            reward += 15.0 
+        if np.cos(alpha) > 0.8:
+            velocity_penalty += 0.1 * al_dot**2
+
+        centering_reward = 5.0 * (1.0 - (theta / self.hard_stop_angle)**2)
+
+        reward = height_reward + centering_reward - (20.0 * dist_upright + 500.0 * energy_error + safety_penalty + theta_penalty + velocity_penalty + effort_penalty + jerk_penalty)
+        
+        if np.cos(alpha) > 0.5: 
+            proximity = (np.cos(alpha) - 0.5) / 0.5
+            stability = np.exp(-2.0 * abs(theta)) * np.exp(-0.1 * (abs(th_dot) + abs(al_dot)))
+            reward += 100.0 * proximity * stability
+
+        if np.cos(alpha) > 0.95:
+            reward += 20.0
 
         self.prev_voltage = voltage
         terminated = bool(abs(th_dot) > 100.0 or abs(al_dot) > 100.0)

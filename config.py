@@ -2,8 +2,7 @@
 import numpy as np
 
 # --- HARDWARE & PHYSICS ---
-VELOCITY_FILTER = 0.8  # EMA for sensors
-ACTION_FILTER = 0.5    # EMA for motor
+VELOCITY_FILTER = 0.8  # Increased for smoother state inputs
 STICTION_VOLTAGE = 0.45 
 HARD_STOP_RAD = 2.37   # ±136 degrees
 ENCODER_RES = 2048
@@ -16,8 +15,9 @@ N_ENVS = 8
 LEARNING_RATE = 3e-4
 
 # --- DEPLOYMENT PERFORMANCE TUNING ---
-POWER_GAIN = 0.5       
-MOTOR_INVERT = -1.0     
+POWER_GAIN = 1.0
+MOTOR_INVERT = 1.0     
+ACTION_FILTER = 0.15   # Reduced for smoother action transitions
 SAFETY_LIMIT_RAD = 2.1  # Warning zone
 SAFETY_KILL_RAD = 2.3   # Shutdown zone
 

@@ -1,55 +1,53 @@
-import numpy as np
-import os
 import sys
+import os
+
+# --- INLINE COMPATIBILITY SHIM ---
+def apply_compat_shims():
+    try:
+        import numpy.core.numeric as numeric
+        sys.modules['numpy._core.numeric'] = numeric
+        import numpy.core.multiarray as multiarray
+        sys.modules['numpy._core.multiarray'] = multiarray
+        import numpy.core.umath as umath
+        sys.modules['numpy._core.umath'] = umath
+        try:
+            import numpy._core
+        except ImportError:
+            import numpy.core as core
+            sys.modules['numpy._core'] = core
+    except (ImportError, AttributeError): pass
+    try:
+        import stable_baselines3.common.utils as sb3_utils
+        for name in ["FloatSchedule", "ConstantSchedule", "LinearSchedule"]:
+            if not hasattr(sb3_utils, name):
+                class DummySchedule:
+                    def __init__(self, value=0.0, *args, **kwargs): self.value = value
+                    def __call__(self, *args, **kwargs): return self.value
+                setattr(sb3_utils, name, DummySchedule)
+    except ImportError: pass
+    try:
+        import numpy.random._pickle as nprp
+        for bg_name in ['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']:
+            if hasattr(nprp, bg_name):
+                bg_cls = getattr(nprp, bg_name)
+                if hasattr(nprp, 'BitGenerators'):
+                    nprp.BitGenerators[bg_cls] = bg_cls
+    except Exception: pass
+    try:
+        from gymnasium.spaces.space import Space
+        def patched_setstate(self, state):
+            if isinstance(state, dict): self.__dict__.update(state)
+        Space.__setstate__ = patched_setstate
+    except (ImportError, AttributeError): pass
+
+apply_compat_shims()
+# --------------------------------
+
+import numpy as np
 import torch
 import pickle
 import cloudpickle
 import matplotlib.pyplot as plt
-
-# --- STABLE BASELINES 3 COMPATIBILITY HACK ---
-import stable_baselines3.common.utils as sb3_utils
-try:
-    import numpy.random._pickle as nprp
-    for bg_name in ['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']:
-        if hasattr(nprp, bg_name):
-            bg_cls = getattr(nprp, bg_name)
-            nprp.BitGenerators[bg_cls] = bg_cls
-except:
-    pass
-
-class DummySchedule:
-    def __init__(self, value=0.0, *args, **kwargs): self.value = value
-    def __call__(self, *args, **kwargs): return self.value
-    @classmethod
-    def load(cls, *args, **kwargs): return cls()
-
-for name in ["ConstantSchedule", "FloatSchedule", "LinearSchedule"]:
-    if not hasattr(sb3_utils, name):
-        setattr(sb3_utils, name, DummySchedule)
-
-original_cloudpickle_loads = cloudpickle.loads
-
-def patched_cloudpickle_loads(data, *args, **kwargs):
-    try:
-        return original_cloudpickle_loads(data, *args, **kwargs)
-    except ModuleNotFoundError as e:
-        if "numpy._core" in str(e):
-            import numpy.core.numeric as _num
-            import numpy.core.multiarray as _mul
-            import numpy.core.umath as _uma
-            sys.modules["numpy._core"] = np.core
-            sys.modules["numpy._core.numeric"] = _num
-            sys.modules["numpy._core.multiarray"] = _mul
-            sys.modules["numpy._core.umath"] = _uma
-            try:
-                return original_cloudpickle_loads(data, *args, **kwargs)
-            finally:
-                for mod in ["numpy._core", "numpy._core.numeric", "numpy._core.multiarray", "numpy._core.umath"]:
-                    if mod in sys.modules: del sys.modules[mod]
-        raise
-
-cloudpickle.loads = patched_cloudpickle_loads
-# --- END HACK ---
 
 from stable_baselines3 import PPO, TD3, SAC
 from qube_env import QubeEnv

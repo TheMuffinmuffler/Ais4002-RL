@@ -1,3 +1,48 @@
+import sys
+import os
+
+# --- INLINE COMPATIBILITY SHIM ---
+def apply_compat_shims():
+    try:
+        import numpy.core.numeric as numeric
+        sys.modules['numpy._core.numeric'] = numeric
+        import numpy.core.multiarray as multiarray
+        sys.modules['numpy._core.multiarray'] = multiarray
+        import numpy.core.umath as umath
+        sys.modules['numpy._core.umath'] = umath
+        try:
+            import numpy._core
+        except ImportError:
+            import numpy.core as core
+            sys.modules['numpy._core'] = core
+    except (ImportError, AttributeError): pass
+    try:
+        import stable_baselines3.common.utils as sb3_utils
+        for name in ["FloatSchedule", "ConstantSchedule", "LinearSchedule"]:
+            if not hasattr(sb3_utils, name):
+                class DummySchedule:
+                    def __init__(self, value=0.0, *args, **kwargs): self.value = value
+                    def __call__(self, *args, **kwargs): return self.value
+                setattr(sb3_utils, name, DummySchedule)
+    except ImportError: pass
+    try:
+        import numpy.random._pickle as nprp
+        for bg_name in ['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']:
+            if hasattr(nprp, bg_name):
+                bg_cls = getattr(nprp, bg_name)
+                if hasattr(nprp, 'BitGenerators'):
+                    nprp.BitGenerators[bg_cls] = bg_cls
+    except Exception: pass
+    try:
+        from gymnasium.spaces.space import Space
+        def patched_setstate(self, state):
+            if isinstance(state, dict): self.__dict__.update(state)
+        Space.__setstate__ = patched_setstate
+    except (ImportError, AttributeError): pass
+
+apply_compat_shims()
+# --------------------------------
+
 import gymnasium as gym
 import numpy as np
 from stable_baselines3 import PPO

@@ -123,24 +123,33 @@ class QUBE:
 
     def update(self):
         # 1. Send 10 bytes of command
-        # To help with sync, we could add a header byte here, 
-        # but the Arduino sketch needs to match.
         self.master.write(bytearray(self.output))
         
         # Clear reset flags after sending
         self.output[0] = 0
         self.output[1] = 0
         
-        # 2. Read 12 bytes of response
-        raw_data = self.master.read(12)
+        # 2. Robust Read: Flush old data and wait for a FRESH packet.
+        # This eliminates latency-induced instability.
+        self.master.reset_input_buffer()
         
+        # Wait for exactly 12 bytes (timeout after 50ms)
+        start_wait = time.time()
+        while self.master.in_waiting < 12:
+            if time.time() - start_wait > 0.05:
+                return # Skip this update if hardware is slow
+            
+        raw_data = self.master.read(12)
         if len(raw_data) == 12:
-            self.motorAngle = self.decodeEncoderAngle(raw_data[0:4])
-            self.pendulumAngle = self.decodeEncoderAngle(raw_data[4:8])
+            new_motor_angle = self.decodeEncoderAngle(raw_data[0:4])
+            new_pendulum_angle = self.decodeEncoderAngle(raw_data[4:8])
+            
+            # 3. Jump Protection: Ignore garbage data (e.g. >180 deg jump in 20ms)
+            if abs(new_motor_angle - self.motorAngle) < 180:
+                self.motorAngle = new_motor_angle
+            
+            if abs(new_pendulum_angle - self.pendulumAngle) < 180:
+                self.pendulumAngle = new_pendulum_angle
+                
             self.rpm = self.decodeMotorRPM(raw_data[8:10])
             self.current = self.decodeMotorCurrent(raw_data[10:12])
-        else:
-            # We might be out of sync. If we keep getting wrong lengths, 
-            # we should flush.
-            if len(raw_data) > 0:
-                self.master.reset_input_buffer()

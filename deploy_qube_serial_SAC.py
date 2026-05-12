@@ -1,7 +1,57 @@
-import numpy as np
-import time
 import sys
 import os
+
+# --- INLINE COMPATIBILITY SHIM ---
+def apply_compat_shims():
+    # 1. NumPy 2.0 compatibility (for loading models saved with NumPy 2.0 in NumPy 1.x)
+    try:
+        import numpy.core.numeric as numeric
+        sys.modules['numpy._core.numeric'] = numeric
+        import numpy.core.multiarray as multiarray
+        sys.modules['numpy._core.multiarray'] = multiarray
+        import numpy.core.umath as umath
+        sys.modules['numpy._core.umath'] = umath
+        try:
+            import numpy._core
+        except ImportError:
+            import numpy.core as core
+            sys.modules['numpy._core'] = core
+    except (ImportError, AttributeError): pass
+
+    # 2. Stable Baselines 3 legacy model support
+    try:
+        import stable_baselines3.common.utils as sb3_utils
+        for name in ["FloatSchedule", "ConstantSchedule", "LinearSchedule"]:
+            if not hasattr(sb3_utils, name):
+                class DummySchedule:
+                    def __init__(self, value=0.0, *args, **kwargs): self.value = value
+                    def __call__(self, *args, **kwargs): return self.value
+                setattr(sb3_utils, name, DummySchedule)
+    except ImportError: pass
+
+    # 3. NumPy RNG BitGenerator compatibility
+    try:
+        import numpy.random._pickle as nprp
+        for bg_name in ['MT19937', 'PCG64', 'PCG64DXSM', 'Philox', 'SFC64']:
+            if hasattr(nprp, bg_name):
+                bg_cls = getattr(nprp, bg_name)
+                if hasattr(nprp, 'BitGenerators'):
+                    nprp.BitGenerators[bg_cls] = bg_cls
+    except Exception: pass
+
+    # 4. Gymnasium Space compatibility (for legacy picklings)
+    try:
+        from gymnasium.spaces.space import Space
+        def patched_setstate(self, state):
+            if isinstance(state, dict): self.__dict__.update(state)
+        Space.__setstate__ = patched_setstate
+    except (ImportError, AttributeError): pass
+
+apply_compat_shims()
+# --------------------------------
+
+import numpy as np
+import time
 import torch
 import csv
 import threading
@@ -10,7 +60,7 @@ from datetime import datetime
 from stable_baselines3 import SAC
 from QUBE import QUBE
 from control import COM_PORT
-from config import VELOCITY_FILTER, ACTION_FILTER, POWER_GAIN, MOTOR_INVERT, SAFETY_LIMIT_RAD, SAFETY_KILL_RAD, STICTION_VOLTAGE
+from config import VELOCITY_FILTER, ACTION_FILTER, POWER_GAIN, MOTOR_INVERT, SAFETY_LIMIT_RAD, SAFETY_KILL_RAD, STICTION_VOLTAGE, ENCODER_RES
 
 class AsyncLogger:
     def __init__(self, filename):
@@ -42,10 +92,19 @@ class AsyncLogger:
 
 def deploy():
     # 1. Load SAC model
+    from qube_env import QubeEnv
     model_path = "models/qube_sac_final.zip"
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Create a dummy env to provide spaces
+    dummy_env = QubeEnv()
+    custom_objects = {
+        "observation_space": dummy_env.observation_space,
+        "action_space": dummy_env.action_space
+    }
+    
     try:
-        model = SAC.load(model_path, device=device)
+        model = SAC.load(model_path, env=dummy_env, custom_objects=custom_objects, device=device)
         print(f"SAC Model loaded from {model_path}")
     except Exception as e:
         print(f"Error loading model: {e}")
@@ -76,13 +135,19 @@ def deploy():
     log_filename = f"logs/deploy_sac_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     logger = AsyncLogger(log_filename)
 
+    qube.update()
     t_start = time.time()
     t_last = t_start
-    prev_theta = 0
-    prev_alpha = 0
+    prev_theta = np.deg2rad(qube.getMotorAngle())
+    prev_alpha = np.deg2rad(qube.getPendulumAngle())
     th_dot_filt = 0
     al_dot_filt = 0
     prev_voltage = 0.0
+
+    hits_left = 0
+    hits_right = 0
+    was_in_kill_left = False
+    was_in_kill_right = False
 
     try:
         while True:
@@ -90,29 +155,46 @@ def deploy():
             qube.update()
             
             theta_deg = qube.getMotorAngle()
-            alpha_raw = qube.getPendulumAngle()
-            
-            alpha_deg = ((alpha_raw) % 360) - 180
+            alpha_raw_deg = qube.getPendulumAngle()
             
             theta = np.deg2rad(theta_deg)
-            alpha = np.deg2rad(alpha_deg)
+            alpha_raw_rad = np.deg2rad(alpha_raw_deg)
+            
+            # --- Quantization to match training (v4) ---
+            counts_per_rad = ENCODER_RES / (2 * np.pi)
+            theta = np.round(theta * counts_per_rad) / counts_per_rad
+            alpha_raw_rad = np.round(alpha_raw_rad * counts_per_rad) / counts_per_rad
+
+            # --- Corrected Alpha Mapping (v3) ---
+            # Simulation: 0 is TOP, pi/-pi is BOTTOM.
+            # Hardware: Reset at BOTTOM, so alpha_raw=0 is BOTTOM.
+            # To map: alpha = alpha_raw_rad - np.pi
+            # If alpha_raw = 0 (BOTTOM) -> alpha = -pi (BOTTOM in sim)
+            # If alpha_raw = pi (TOP)    -> alpha = 0 (TOP in sim)
+            alpha = alpha_raw_rad - np.pi
+            
+            # Standard normalization to [-pi, pi]
+            alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
             
             dt = t_now - t_last
             t_last = t_now
-            if dt <= 0: dt = 0.02
+            # Robust dt handling to prevent velocity spikes
+            if dt < 0.01: dt = 0.02
             
+            def shortest_angle_diff(a, b):
+                diff = a - b
+                return (diff + np.pi) % (2 * np.pi) - np.pi
+
             th_dot_raw = (theta - prev_theta) / dt
-            al_dot_raw = (alpha - prev_alpha) / dt
+            al_dot_raw = shortest_angle_diff(alpha, prev_alpha) / dt
             th_dot_filt = VELOCITY_FILTER * th_dot_filt + (1 - VELOCITY_FILTER) * th_dot_raw
             al_dot_filt = VELOCITY_FILTER * al_dot_filt + (1 - VELOCITY_FILTER) * al_dot_raw
             
-            pred_theta = theta + th_dot_filt * 0.02
-            pred_alpha = alpha + al_dot_filt * 0.02
-
             obs = np.array([
-                np.sin(pred_theta), np.cos(pred_theta),
-                np.sin(pred_alpha), np.cos(pred_alpha),
-                th_dot_filt, al_dot_filt
+                np.sin(theta), np.cos(theta),
+                np.sin(alpha), np.cos(alpha),
+                th_dot_filt, al_dot_filt,
+                prev_voltage / 10.0
             ], dtype=np.float32)
 
             action, _ = model.predict(obs, deterministic=True)
@@ -120,26 +202,37 @@ def deploy():
             
             voltage = (1 - ACTION_FILTER) * prev_voltage + ACTION_FILTER * requested_voltage
             
-            if abs(voltage) > 0.1:
-                voltage += np.sign(voltage) * STICTION_VOLTAGE
+            # Corrected Hit Counter Logic (Left is Positive, Right is Negative)
+            if theta > SAFETY_KILL_RAD:
+                if not was_in_kill_left:
+                    hits_left += 1
+                    was_in_kill_left = True
+                    print(f"\nHit Left: {hits_left}/20")
+            else:
+                was_in_kill_left = False
 
-            abs_theta = abs(theta)
-            if abs_theta > SAFETY_LIMIT_RAD:
-                voltage = np.sign(theta) * (abs_theta - SAFETY_LIMIT_RAD) * 15.0
-                if abs_theta > SAFETY_KILL_RAD:
-                    print(f"Safety Kill! Theta: {theta_deg:.1f}")
-                    break
+            if theta < -SAFETY_KILL_RAD:
+                if not was_in_kill_right:
+                    hits_right += 1
+                    was_in_kill_right = True
+                    print(f"\nHit Right: {hits_right}/20")
+            else:
+                was_in_kill_right = False
 
-            voltage = np.clip(voltage, -8.0, 8.0)
+            if hits_left >= 20 or hits_right >= 20:
+                print(f"Safety Kill! 20 hits reached on one side.")
+                break
+
+            voltage = np.clip(voltage, -10.0, 10.0)
             qube.setMotorVoltage(voltage)
             prev_voltage = voltage
             prev_theta = theta
             prev_alpha = alpha
 
             if int(t_now * 50) % 5 == 0:
-                print(f"Th:{theta_deg:5.1f} | Al:{alpha_deg:5.1f} | V:{voltage:5.2f}", end='\r')
+                print(f"Th:{theta_deg:5.1f} | Al:{alpha_raw_deg:5.1f} | V:{voltage:5.2f}", end='\r')
 
-            logger.log([t_now - t_start, dt, theta_deg, alpha_deg, th_dot_filt, al_dot_filt, voltage, "SAC"])
+            logger.log([t_now - t_start, dt, theta_deg, alpha_raw_deg, th_dot_filt, al_dot_filt, voltage, "SAC"])
             
             elapsed = time.time() - t_now
             time.sleep(max(0, 0.02 - elapsed))
