@@ -21,7 +21,7 @@ def main():
     os.makedirs("models", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    new_logger = configure("./logs/td3_v4/", ["stdout", "csv", "tensorboard"])
+    new_logger = configure("./logs/td3_fresh_500k/", ["stdout", "csv", "tensorboard"])
 
     device = get_device()
     print(f"Using device: {device}")

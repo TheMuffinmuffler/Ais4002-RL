@@ -2,7 +2,7 @@
 import numpy as np
 
 # --- HARDWARE & PHYSICS ---
-VELOCITY_FILTER = 0.65  # Increased for smoother state inputs
+VELOCITY_FILTER = 0.90  # High filtering to eliminate encoder quantization noise
 STICTION_VOLTAGE = 0.45 
 HARD_STOP_RAD = 2.37   # ±136 degrees
 ENCODER_RES = 2048
@@ -15,11 +15,11 @@ N_ENVS = 8
 LEARNING_RATE = 3e-4
 
 # --- DEPLOYMENT PERFORMANCE TUNING ---
-POWER_GAIN = 1.0
+POWER_GAIN = 0.80
 MOTOR_INVERT = -1.0     # Invert voltage so +u moves arm LEFT
 THETA_INVERT = -1.0     # Invert arm sensor so LEFT is positive
 PENDULUM_INVERT = -1.0  # Invert pendulum sensor so CCW is positive
-ACTION_FILTER = 0.25   # Increased to smooth out over-corrections
+ACTION_FILTER = 0.10   # High smoothing for fluid motor interaction
 SAFETY_LIMIT_RAD = 2.1  # Warning zone
 SAFETY_KILL_RAD = 2.3   # Shutdown zone
 

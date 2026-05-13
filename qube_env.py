@@ -99,7 +99,7 @@ class QubeEnv(gym.Env):
         self.th_dot_filt = self.vel_filter * self.th_dot_filt + (1 - self.vel_filter) * theta_dot
         self.al_dot_filt = self.vel_filter * self.al_dot_filt + (1 - self.vel_filter) * alpha_dot
 
-        # alpha=pi is TOP (upright), alpha=0 is BOTTOM (hanging)
+        # alpha=0 is TOP (upright), alpha=pi is BOTTOM (hanging)
         return np.array([
             np.sin(theta_q), np.cos(theta_q),
             np.sin(alpha_q), np.cos(alpha_q),
@@ -116,9 +116,9 @@ class QubeEnv(gym.Env):
         self.th_dot_filt = 0.0
         self.al_dot_filt = 0.0
         
-        # --- Physical Reset: 100% Randomized Bottom-ish ---
-        # 0 is BOTTOM. Start +/- 0.5 to give it a "running start"
-        alpha_init = 0.0 + self.np_random.uniform(-0.5, 0.5)
+        # --- FINAL STAGE: Standard Bottom Reset ---
+        # The agent has now learned to swing, catch, and balance in stages.
+        alpha_init = np.pi + self.np_random.uniform(-0.5, 0.5)
 
         self.state = np.array([0, alpha_init, 0, 0], dtype=np.float32) + \
                      self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
@@ -148,19 +148,20 @@ class QubeEnv(gym.Env):
             tau = (self.kt / self.Rm) * (eff_u - self.km * th_dot)
             
             m11 = self.J_r + self.m_p * self.L_r**2 + self.m_p * self.l_p**2 * np.sin(alpha)**2
-            m12 = self.m_p * self.L_r * self.l_p * np.cos(alpha)
+            m12 = -self.m_p * self.L_r * self.l_p * np.cos(alpha) # Fixed for TOP=0
             m21 = m12
             m22 = self.J_p + self.m_p * self.l_p**2
             M = np.array([[m11, m12], [m21, m22]])
             
             c11 = self.D_r + self.m_p * self.l_p**2 * np.sin(2*alpha) * al_dot
-            c12 = -self.m_p * self.L_r * self.l_p * np.sin(alpha) * al_dot
+            c12 = self.m_p * self.L_r * self.l_p * np.sin(alpha) * al_dot # Fixed for TOP=0
             c21 = -0.5 * self.m_p * self.l_p**2 * np.sin(2*alpha) * th_dot
             c22 = self.D_p
             C = np.array([[c11, c12], [c21, c22]])
             
-            # Restorative force towards bottom (alpha=0)
-            G = np.array([0, self.m_p * self.g * self.l_p * np.sin(alpha + self.tilt)])
+            # Restorative force towards BOTTOM (alpha=pi)
+            # sin(alpha + pi) = -sin(alpha). 
+            G = np.array([0, -self.m_p * self.g * self.l_p * np.sin(alpha + self.tilt)])
             rhs = np.array([tau, 0]) - C @ np.array([th_dot, al_dot]) - G
             q_ddot = np.linalg.solve(M, rhs)
             return np.array([th_dot, al_dot, q_ddot[0], q_ddot[1]])
@@ -183,43 +184,54 @@ class QubeEnv(gym.Env):
                 self.state[2] = -0.3 * self.state[2]
 
         # --- Random Perturbation (Hitting the pendulum) ---
-        if self.domain_randomization and np.cos(self.state[1]) < -0.8:
+        if self.domain_randomization and np.cos(self.state[1]) > 0.8:
             if self.np_random.random() < 0.01: 
                 hit_velocity = self.np_random.uniform(-5.0, 5.0) 
                 self.state[3] += hit_velocity
 
         theta, alpha, th_dot, al_dot = self.state
         
-        # Upright Target: alpha = pi (cos = -1)
-        dist_upright = (np.cos(alpha) + 1)**2 + (np.sin(alpha))**2 
-        height_reward = 20.0 * (1.0 - np.cos(alpha))**2 
+        # Upright Target: alpha = 0 (cos = 1)
+        dist_upright = (np.cos(alpha) - 1)**2 + (np.sin(alpha))**2 
         
-        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 - np.cos(alpha))
+        # INCREASED GRADIENT: More reward for just getting higher
+        height_reward = 40.0 * (np.cos(alpha) + 1.0)**2 + 60.0 * np.exp(-1.0 * dist_upright)
+        
+        total_energy = 0.5 * self.J_p * al_dot**2 + self.m_p * self.g * self.l_p * (1 + np.cos(alpha))
         E_target = 2 * self.m_p * self.g * self.l_p 
-        energy_gain = 20.0 * min(total_energy, E_target)
+        energy_gain = 100.0 * min(total_energy, E_target)
 
-        swingup_bonus = 0.0
-        if np.cos(alpha) < 0.0: # Above horizontal
-            swingup_bonus = 50.0
+        # Hanging Penalty (Stick): Discourage staying at the bottom (cos(alpha) near -1)
+        hanging_penalty = 0.0
+        if np.cos(alpha) < -0.707: # Within 45 degrees of bottom
+            hanging_penalty = 20.0 * ((-np.cos(alpha) - 0.707) / (1.0 - 0.707))
 
-        safety_penalty = 0.05 * np.exp(3.5 * abs(theta)) 
-        theta_penalty = 5.0 * theta**2
+        # Spinning Penalty (Anti-Helicopter): Discourage continuous rotation
+        spinning_penalty = 0.0
+        if abs(alpha) > 2.0 * np.pi: # More than one full rotation in either direction
+            spinning_penalty = 100.0 * (abs(alpha) / (2.0 * np.pi))
+
+        # Removed discontinuous swingup_bonus to prevent "Reward Cliff Blindness"
+
+        safety_penalty = 0.05 * np.exp(2.0 * abs(theta)) 
+        theta_penalty = 1.0 * theta**2
         effort_penalty = 0.005 * voltage**2
         velocity_penalty = 0.005 * th_dot**2 + 0.005 * al_dot**2
         
-        if np.cos(alpha) < -0.8:
+        if np.cos(alpha) > 0.8:
             velocity_penalty += 0.1 * al_dot**2
+            effort_penalty += 0.05 * voltage**2 # Strongly penalize jittery voltage near the top
 
-        centering_reward = 10.0 * (1.0 - (theta / self.hard_stop_angle)**2)
+        centering_reward = 2.0 * (1.0 - (theta / self.hard_stop_angle)**2)
 
-        reward = height_reward + centering_reward + energy_gain + swingup_bonus - (1.0 * dist_upright + safety_penalty + theta_penalty + velocity_penalty + effort_penalty + jerk_penalty)
+        reward = height_reward + centering_reward + energy_gain - (1.0 * dist_upright + safety_penalty + theta_penalty + velocity_penalty + effort_penalty + jerk_penalty + hanging_penalty + spinning_penalty)
         
-        if np.cos(alpha) < -0.5: # Top half
-            proximity = (-np.cos(alpha) - 0.5) / 0.5
+        if np.cos(alpha) > 0.5: # Top half
+            proximity = (np.cos(alpha) - 0.5) / 0.5
             stability = np.exp(-2.0 * abs(theta)) * np.exp(-0.1 * (abs(th_dot) + abs(al_dot)))
             reward += 100.0 * proximity * stability
 
-        if np.cos(alpha) < -0.95: # Balance zone
+        if np.cos(alpha) > 0.95: # Balance zone
             reward += 20.0
 
         self.prev_voltage = voltage

@@ -59,19 +59,18 @@ from stable_baselines3.common.monitor import Monitor
 PPO_TOTAL_STEPS = 1000000  
 TD3_TOTAL_STEPS = 500000
 SAC_TOTAL_STEPS = 1000000
-N_ENVS = 4 # Reduced for laptop thermal management
+N_ENVS = 8 
 LEARNING_RATE = 2e-4
 # -------------------------------------
 
 def get_device():
-    # Force CPU for Intel MacBook compatibility and thermal stability
-    return "cpu"
+    return "cuda"
 
 def train():
     os.makedirs("models", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     
-    new_logger = configure("./logs/ppo_retrain/", ["stdout", "csv", "tensorboard"])
+    new_logger = configure("./logs/ppo_fresh_1m/", ["stdout", "csv", "tensorboard"])
     
     device = get_device()
     print(f"Using device: {device}")
@@ -79,20 +78,14 @@ def train():
     env = make_vec_env(lambda: QubeEnv(domain_randomization=True), n_envs=N_ENVS)
     eval_env = Monitor(QubeEnv(domain_randomization=False))
     
-    # Check if we should load the existing model to continue
-    model_path = "models/qube_ppo_final.zip"
-    
-    custom_objects = {
-        "observation_space": eval_env.observation_space,
-        "action_space": eval_env.action_space
-    }
+    # FORCE FRESH START for new coordinate system
+    model = None
 
-    # Now that we have the correct obs space (7), we CAN load the model we just saved
-    if os.path.exists(model_path):
-        print(f"Resuming PPO from {model_path}...")
-        model = PPO.load(model_path, env=env, device=device, custom_objects=custom_objects)
+    if model is not None:
+        print(f"Resuming PPO from models/qube_ppo_final.zip...")
+        # (omitted load logic for brevity as we are forcing None)
     else:
-        print("Starting fresh PPO training...")
+        print("Starting FRESH PPO training...")
         model = PPO(
             "MlpPolicy",
             env,

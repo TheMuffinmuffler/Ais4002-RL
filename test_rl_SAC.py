@@ -155,7 +155,8 @@ def test():
     # Phase Plot: Pendulum
     plt.subplot(1, 2, 1)
     plt.plot(np.rad2deg(history[:, 1]), np.rad2deg(history[:, 3]), color='purple')
-    plt.axvline(0, color='red', linestyle='--', alpha=0.5) # 0 is Upright
+    plt.axvline(180, color='red', linestyle='--', alpha=0.5) # 180 is Upright
+    plt.axvline(-180, color='red', linestyle='--', alpha=0.5)
     plt.xlabel("Alpha (deg)")
     plt.ylabel("Alpha Dot (deg/s)")
     plt.title("Pendulum Phase Space")

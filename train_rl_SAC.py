@@ -56,10 +56,9 @@ from stable_baselines3.common.logger import configure
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from qube_env import QubeEnv
-from train_rl import SAC_TOTAL_STEPS, N_ENVS, LEARNING_RATE
 
-# Training steps for fresh start
-RETRAIN_STEPS = 500000 
+# Training steps for integration
+RETRAIN_STEPS = 1000000 
 N_ENVS_LAPTOP = 16
 
 def get_device():
@@ -84,10 +83,11 @@ def main():
 
     model_path = "models/qube_sac_final.zip"
     
-    # Force FRESH training because the coordinate system flipped (physics changed)
-    model = None
-
-    if model is None:
+    # LOAD the previous model for Curriculum Learning
+    if os.path.exists(model_path):
+        print(f"Loading existing model from {model_path} for Curriculum Learning...")
+        model = SAC.load(model_path, env=env, device=device)
+    else:
         print("Starting FRESH SAC training...")
         policy_kwargs = dict(net_arch=[400, 300])
         model = SAC(
@@ -101,7 +101,7 @@ def main():
             gamma=0.99,
             train_freq=16,
             gradient_steps=16,
-            ent_coef=0.1,
+            ent_coef='auto',
             target_update_interval=1,
             policy_kwargs=policy_kwargs,
             verbose=1,
@@ -113,19 +113,19 @@ def main():
     checkpoint_callback = CheckpointCallback(
         save_freq=50000 // N_ENVS_LAPTOP,
         save_path="models/",
-        name_prefix="qube_sac_fresh"
+        name_prefix="qube_sac_curriculum"
     )
 
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path=os.path.join("models/", "best_sac_fresh"),
-        log_path="logs/sac_eval_fresh/",
+        best_model_save_path=os.path.join("models/", "best_sac_curriculum"),
+        log_path="logs/sac_eval_curriculum/",
         eval_freq=10000 // N_ENVS_LAPTOP,
         deterministic=True,
         render=False
     )
 
-    print(f"Training fresh SAC for {RETRAIN_STEPS} steps...")
+    print(f"Training SAC for {RETRAIN_STEPS} steps...")
     model.learn(
         total_timesteps=RETRAIN_STEPS,
         callback=[checkpoint_callback, eval_callback],

@@ -38,17 +38,25 @@ def deploy():
         print(f"Failed to connect: {e}")
         return
 
-    print("Calibrating...")
-    qube.setRGB(999, 999, 999) # White
-    qube.resetMotorEncoder()
-    time.sleep(1)
+    # 3. Auto-Homing Routine
+    from homing import auto_home
+    user_home = input("\nRun auto-homing routine for the arm? (y/n): ").lower()
+    if user_home == 'y':
+        auto_home(qube)
+    else:
+        print("Skipping auto-homing. Please ensure arm is manually centered.")
+        qube.resetMotorEncoder()
+        time.sleep(1)
+
+    print("Calibrating Pendulum... (Ensure it is HANGING DOWN)")
+    qube.setRGB(999, 999, 0) # Yellow
     qube.resetPendulumEncoder() # Resetting at BOTTOM
     qube.update()
     
     print("\n--- READY ---")
-    print("1. Ensure pendulum is HANGING DOWN.")
-    print("2. Deployment starts in 5s...")
-    time.sleep(5)
+    print("1. Pendulum should be HANGING DOWN.")
+    print("2. Deployment starts in 3s...")
+    time.sleep(3)
     qube.setRGB(0, 0, 999) # Blue for SAC
 
     log_filename = f"logs/deploy_sac_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -86,9 +94,13 @@ def deploy():
             alpha_raw_deg = qube.getPendulumAngle() * PENDULUM_INVERT
             
             # --- VERIFIED MAPPING ---
-            # BOTTOM=0 (HW) -> 0 (Sim). TOP=180 (HW) -> 180 (Sim).
-            alpha_deg = alpha_raw_deg
-            alpha_deg = (alpha_deg + 180) % 360 - 180
+            # HW BOTTOM=0 -> Sim BOTTOM=180. HW TOP=-180 -> Sim TOP=0.
+            alpha_deg = alpha_raw_deg + 180.0
+            if alpha_deg > 180.0:
+                alpha_deg -= 360.0
+            elif alpha_deg < -180.0:
+                alpha_deg += 360.0
+            # Result: 0 -> 180, -180 -> 0. Correct!
             
             theta = np.deg2rad(theta_deg)
             alpha = np.deg2rad(alpha_deg)
