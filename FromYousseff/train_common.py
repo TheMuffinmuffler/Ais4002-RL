@@ -13,6 +13,10 @@ from qube_env import QubeEnv
 
 apply_compat_shims()
 
+# Define the base directory for FromYousseff relative to this file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
 def get_device(prefer_cuda=True):
     if prefer_cuda and torch.cuda.is_available():
@@ -40,22 +44,23 @@ def make_eval_env():
 
 
 def setup_dirs(algo_name):
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
-    os.makedirs(f"logs/{algo_name}", exist_ok=True)
-    return configure(f"./logs/{algo_name}/", ["stdout", "csv", "tensorboard"])
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    algo_log_dir = os.path.join(LOGS_DIR, algo_name)
+    os.makedirs(algo_log_dir, exist_ok=True)
+    return configure(algo_log_dir, ["stdout", "csv", "tensorboard"])
 
 
 def callbacks(algo_name, n_envs):
     checkpoint = CheckpointCallback(
         save_freq=max(CHECKPOINT_FREQ // max(n_envs, 1), 1),
-        save_path="models/",
+        save_path=MODELS_DIR,
         name_prefix=f"qube_{algo_name}_checkpoint",
     )
     eval_callback = EvalCallback(
         make_eval_env(),
-        best_model_save_path=os.path.join("models", f"best_{algo_name}"),
-        log_path=os.path.join("logs", f"{algo_name}_eval"),
+        best_model_save_path=os.path.join(MODELS_DIR, f"best_{algo_name}"),
+        log_path=os.path.join(LOGS_DIR, f"{algo_name}_eval"),
         eval_freq=max(EVAL_FREQ // max(n_envs, 1), 1),
         deterministic=True,
         render=False,

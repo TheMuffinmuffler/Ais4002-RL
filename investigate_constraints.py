@@ -5,7 +5,7 @@ from stable_baselines3 import SAC
 import matplotlib.pyplot as plt
 
 def investigate():
-    model_path = "models/qube_sac_final.zip"
+    model_path = "FromYousseff/models/qube_sac_final.zip"
     env = QubeEnv(domain_randomization=False)
     model = SAC.load(model_path)
 

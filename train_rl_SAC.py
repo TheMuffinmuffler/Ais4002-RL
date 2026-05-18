@@ -81,7 +81,7 @@ def main():
     )
     eval_env = Monitor(QubeEnv(domain_randomization=False))
 
-    model_path = "models/qube_sac_final.zip"
+    model_path = "FromYousseff/models/qube_sac_final.zip"
     
     # LOAD the previous model for Curriculum Learning
     if os.path.exists(model_path):

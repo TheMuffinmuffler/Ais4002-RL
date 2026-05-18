@@ -10,6 +10,9 @@ from qube_env import QubeEnv
 
 apply_compat_shims()
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+PLOTS_DIR = os.path.join(BASE_DIR, "plots")
 
 def get_device():
     return "cuda" if torch.cuda.is_available() else "cpu"
@@ -25,12 +28,12 @@ def _load(algo):
         from stable_baselines3 import SAC as Algo
     else:
         raise ValueError(algo)
-    model_path = f"models/qube_{algo}_final.zip"
+    model_path = os.path.join(MODELS_DIR, f"qube_{algo}_final.zip")
     return Algo.load(model_path, device=get_device()), model_path
 
 
 def run_test(algo="sac", steps=500):
-    os.makedirs("plots", exist_ok=True)
+    os.makedirs(PLOTS_DIR, exist_ok=True)
     try:
         model, model_path = _load(algo)
         print(f"Loaded {algo.upper()} model from {model_path}")
@@ -58,6 +61,12 @@ def run_test(algo="sac", steps=500):
     if history.size == 0:
         print("No data collected")
         return
+
+    # Save history to CSV
+    header = "theta,alpha,theta_dot,alpha_dot,action,reward"
+    csv_path = os.path.join(PLOTS_DIR, f"{algo.lower()}_history.csv")
+    np.savetxt(csv_path, history, delimiter=",", header=header, comments="")
+    print(f"Saved {csv_path}")
 
     alpha_error = np.abs((history[:, 1] - np.pi + np.pi) % (2 * np.pi) - np.pi)
     upright = alpha_error < np.deg2rad(15.0)
@@ -90,7 +99,9 @@ def run_test(algo="sac", steps=500):
     plt.grid(True, alpha=0.3)
 
     plt.subplot(4, 1, 3)
-    plt.step(x, np.clip(history[:, 4], -ACTION_LIMIT, ACTION_LIMIT), label="Action (voltage)")
+    # Super-Env: history[:, 4] is normalized [-1, 1], scale it to ACTION_LIMIT for the plot
+    voltage_history = history[:, 4] * ACTION_LIMIT
+    plt.step(x, np.clip(voltage_history, -ACTION_LIMIT, ACTION_LIMIT), label="Action (voltage)")
     plt.ylabel("Voltage (V)")
     plt.ylim(-ACTION_LIMIT - 1, ACTION_LIMIT + 1)
     plt.legend(loc="upper right")
@@ -105,8 +116,8 @@ def run_test(algo="sac", steps=500):
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    path = f"plots/{algo.lower()}_dynamics.png"
-    plt.savefig(path, dpi=200)
-    print(f"Saved {path}")
+    plot_path = os.path.join(PLOTS_DIR, f"{algo.lower()}_dynamics.png")
+    plt.savefig(plot_path, dpi=200)
+    print(f"Saved {plot_path}")
     plt.close()
     env.close()

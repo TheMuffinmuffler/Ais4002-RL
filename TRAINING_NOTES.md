@@ -2,25 +2,33 @@
 
 This file tracks insights, reward analysis, and "lessons learned" during the training of Reinforcement Learning agents for the Qube Servo 2.
 
-## SAC Training Dynamics (v4)
+## SAC Iterative Refinement (v6.x)
 
-### The "-43,700" Red Flag
-A stable reward around **-43,700** strongly suggests the model is **NOT** balancing and has reached a local optimum of "giving up."
+### v6.2: The "Smooth Gradient" Strategy
+*   **Change**: Removed `r_height` (all-or-nothing), buffed `r_swing` to **10.0**.
+*   **Rationale**: Bridged the gap between exploration and balancing. A global potential energy gradient (0-20 pts) is a better "breadcrumb trail" than a localized funnel.
+*   **Result**: Success in discovery, but led to "dragging" (leaning at 40 degrees to harvest the wide jackpot) and oscillations.
 
-#### Reward Breakdown:
-*   **Balance Reward**: Perfect balance ($\cos(\alpha) > 0.95$) gives $+20$/step $\approx +10,000$ per episode.
-*   **"Hanging Down" Penalty**: When $\cos(\alpha) = -1$, the `dist_upright` penalty is $\approx 80$/step $\approx -40,000$ per episode.
-*   **Local Optimum**: Rewards in the $-40k$ to $-45k$ range indicate the model has learned that "doing nothing" is safer than "failing spectacularly." It avoids `safety_penalty` and `jerk_penalty` by letting the pendulum hang still.
+### v6.3: The "Precision" Refinement
+*   **Change**: Tightened `r_persistence` gate (45° -> **20°**), reduced `r_swing` (10.0 -> **2.5**).
+*   **Rationale**: Forced the agent into true balancing. By shrinking the gate, "dragging" becomes non-profitable. Lowering `r_swing` reduced the incentive to oscillate back and forth.
+*   **Result**: Improved consistency, but high-frequency wiggling suggested the need for safety limit hardening.
 
-### Why Models Get Stuck:
-1.  **Aggressive Penalties**: The `energy_error` ($500 \times$) and `dist_upright` are very high. If the model swings and misses, the negative reinforcement may "scare" the policy into staying still.
-2.  **Overfitting to Safety**: High gradient update frequencies can cause the model to overfit to a "safe" (but failing) strategy before it has experienced enough successful swing-ups.
+### v6.4: The "Safety-First" Configuration (Current)
+*   **Objective**: Prioritize hardware longevity and master the full swing-up sequence.
+*   **Reset Curriculum**: Shifted from 55% Bootcamp to **70% Classic (Hanging)**.
+    *   *Why*: Forces the agent to master the swing-up from a dead stop rather than over-fitting to stability starts.
+*   **Safety Hardening**:
+    *   Arm Velocity Limit: **40 rad/s** (was 80).
+    *   Pendulum Velocity Limit: **60 rad/s** (was 100).
+    *   Helicopter Limit: **360°** (was 400°).
+    *   *Why*: Protects the physical motor and arm from high-speed impacts at the hard stops.
+*   **Repulsive Boundary**: `out_penalty` increased to **-200.0 * x²**.
+    *   *Why*: Creates a massive "repulsive force" that pushes the arm back to center long before it hits the hardware limits.
 
-### Strategy Recommendations:
-*   **Patience**: SAC often has an "Aha!" moment. It may stay at $-40k$ for $300k$ steps and then suddenly "click," with rewards jumping to $+5k$ or higher.
-*   **Threshold for Intervention**: If the reward is still $\approx -43k$ at $500,000$ steps, consider:
-    *   Increasing `ent_coef` (entropy) to force more exploration.
-    *   Reducing the `energy_error` penalty weight to make "swinging" less risky.
+---
+*Note: v6.4 is currently training. Monitoring for breakthrough in swing-up consistency.*
+
 
 ## Environment Robustness (Sim-to-Real)
 

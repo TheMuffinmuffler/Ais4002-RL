@@ -35,7 +35,7 @@ K_CABLE = 0.002              # N m/rad, encoder-cable restoring stiffness
 # ---------------------------------------------------------------------------
 DT = 0.02                    # 50 Hz control loop
 EPISODE_STEPS = 500
-ACTION_LIMIT = 10.0          # V, safe training/deployment voltage limit
+ACTION_LIMIT = 24.0          # V, safe training/deployment voltage limit
 HARD_STOP_RAD = 2.37         # roughly +/-136 deg
 ENCODER_RES = 2048
 
@@ -55,11 +55,11 @@ TILT_RANDOMIZATION_RAD = np.deg2rad(3.0)
 # Training presets. These are intentionally modest for laptop runtime.
 # Use --steps on the train scripts to override.
 # ---------------------------------------------------------------------------
-N_ENVS = 8
+N_ENVS = 12
 LEARNING_RATE = 3e-4
 PPO_TOTAL_STEPS = 600_000
 TD3_TOTAL_STEPS = 350_000
-SAC_TOTAL_STEPS = 350_000
+SAC_TOTAL_STEPS = 1_000_000
 CHECKPOINT_FREQ = 50_000
 EVAL_FREQ = 20_000
 
@@ -69,8 +69,8 @@ EVAL_FREQ = 20_000
 # ---------------------------------------------------------------------------
 POWER_GAIN = 1.0
 MOTOR_INVERT = -1.0
-THETA_INVERT = -1.0
-PENDULUM_INVERT = -1.0
+THETA_INVERT = 1.0
+PENDULUM_INVERT = 1.0
 SAFETY_LIMIT_RAD = 2.1
 SAFETY_KILL_RAD = 2.3
 MAX_SAME_SIDE_HITS = 20

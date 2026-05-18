@@ -4,7 +4,7 @@ from stable_baselines3 import SAC
 from qube_env import QubeEnv
 
 def check():
-    model_path = "models/qube_sac_final.zip"
+    model_path = "FromYousseff/models/qube_sac_final.zip"
     env = QubeEnv()
     try:
         model = SAC.load(model_path)

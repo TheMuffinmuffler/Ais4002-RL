@@ -14,7 +14,7 @@ from logger import AsyncLogger
 def deploy():
     # 1. Load SAC model
     from qube_env import QubeEnv
-    model_path = "models/qube_sac_final.zip"
+    model_path = "FromYousseff/models/qube_sac_final.zip"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     dummy_env = QubeEnv()

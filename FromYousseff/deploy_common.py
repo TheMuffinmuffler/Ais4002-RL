@@ -24,7 +24,7 @@ from QUBE import QUBE
 apply_compat_shims()
 
 
-def _load_model(algo_name):
+def _load_model(algo_name, model_path=None):
     if algo_name == "ppo":
         from stable_baselines3 import PPO as Algo
     elif algo_name == "td3":
@@ -34,7 +34,10 @@ def _load_model(algo_name):
     else:
         raise ValueError(f"Unknown algorithm: {algo_name}")
 
-    model_path = f"models/qube_{algo_name}_final.zip"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    if model_path is None:
+        model_path = os.path.join(base_dir, f"models/qube_{algo_name}_final.zip")
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Missing model: {model_path}")
 
@@ -60,10 +63,10 @@ def _safe_read_angles(qube):
     return theta_deg, alpha_deg
 
 
-def deploy(algo_name, rgb=(0, 999, 0)):
+def deploy(algo_name, rgb=(0, 999, 0), model_path=None):
     algo_name = algo_name.lower()
     try:
-        model = _load_model(algo_name)
+        model = _load_model(algo_name, model_path=model_path)
     except Exception as exc:
         print(f"Model load failed: {exc}")
         return
@@ -77,7 +80,9 @@ def deploy(algo_name, rgb=(0, 999, 0)):
 
     logger = None
     try:
-        os.makedirs("logs", exist_ok=True)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        logs_dir = os.path.join(base_dir, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
         print("Calibrating. Pendulum must be hanging down and arm must be centred.")
         qube.setRGB(999, 999, 999)
         qube.resetMotorEncoder()
@@ -89,7 +94,7 @@ def deploy(algo_name, rgb=(0, 999, 0)):
         time.sleep(3.0)
         qube.setRGB(*rgb)
 
-        log_filename = f"logs/deploy_{algo_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        log_filename = os.path.join(logs_dir, f"deploy_{algo_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
         logger = AsyncLogger(log_filename)
 
         qube.update()
@@ -132,15 +137,23 @@ def deploy(algo_name, rgb=(0, 999, 0)):
                     np.clip(th_dot_filt, -60.0, 60.0),
                     np.clip(al_dot_filt, -80.0, 80.0),
                     prev_voltage / ACTION_LIMIT,
+                    (loop_start - t_start) / 10.0,  # Normalized time (assuming ~10s episodes)
+                    alpha / (2.0 * np.pi),          # Normalized rotation count (9th dim)
                 ],
                 dtype=np.float32,
             )
 
             action, _ = model.predict(obs, deterministic=True)
-            requested_voltage = float(np.asarray(action).reshape(-1)[0]) * POWER_GAIN * MOTOR_INVERT
+            # Super-Env: action is normalized [-1, 1], scale it to ACTION_LIMIT
+            requested_voltage = float(np.asarray(action).reshape(-1)[0]) * ACTION_LIMIT * POWER_GAIN * MOTOR_INVERT
             requested_voltage = float(np.clip(requested_voltage, -ACTION_LIMIT, ACTION_LIMIT))
             voltage = (1.0 - ACTION_FILTER) * prev_voltage + ACTION_FILTER * requested_voltage
             voltage = float(np.clip(voltage, -ACTION_LIMIT, ACTION_LIMIT))
+
+            if abs(theta) > SAFETY_KILL_RAD:
+                print(f"\nCRITICAL SAFETY KILL: Arm at {theta_deg:.2f} deg exceeds limit {np.rad2deg(SAFETY_KILL_RAD):.2f} deg.")
+                qube.setMotorVoltage(0.0)
+                break
 
             if theta > SAFETY_KILL_RAD:
                 if not was_left:

@@ -121,12 +121,15 @@ def evaluate_model(algo_name, model_class, model_path, n_episodes=5):
     }
 
 def main():
-    os.makedirs("plots", exist_ok=True)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(base_dir, "models")
+    plots_dir = os.path.join(base_dir, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
     
     models = [
-        ("PPO", PPO, "models/qube_ppo_final.zip"),
-        ("TD3", TD3, "models/qube_td3_final.zip"),
-        ("SAC", SAC, "models/qube_sac_final.zip")
+        ("PPO", PPO, os.path.join(models_dir, "qube_ppo_final.zip")),
+        ("TD3", TD3, os.path.join(models_dir, "qube_td3_final.zip")),
+        ("SAC", SAC, os.path.join(models_dir, "qube_sac_final.zip"))
     ]
     
     results = []
@@ -183,8 +186,9 @@ def main():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("plots/comparison_results.png", dpi=200)
-    print("Comparison plot saved to plots/comparison_results.png")
+    comparison_plot_path = os.path.join(plots_dir, "comparison_results.png")
+    plt.savefig(comparison_plot_path, dpi=200)
+    print(f"Comparison plot saved to {comparison_plot_path}")
 
 if __name__ == "__main__":
     main()

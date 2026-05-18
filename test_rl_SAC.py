@@ -61,7 +61,7 @@ def get_device():
 def test():
     os.makedirs("plots", exist_ok=True)
     # Load the trained SAC model
-    model_path = "models/qube_sac_final.zip"
+    model_path = "FromYousseff/models/qube_sac_final.zip"
     device = get_device()
 
     try:

@@ -152,7 +152,18 @@ cython_debug/
 .DS_Store
 
 # Project specific
-
 Data/
-
 /Images
+
+# RL Models and Logs
+*.zip
+*.csv
+*.png
+*.npz
+logs/
+FromYousseff/logs/
+FromYousseff/plots/
+FromYousseff/models/
+models/
+!FromYousseff/models/qube_sac_final.zip
+!models/qube_sac_retrain_final.zip
