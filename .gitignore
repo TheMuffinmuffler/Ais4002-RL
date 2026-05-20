@@ -161,8 +161,8 @@ Data/
 *.png
 *.npz
 logs/
-FromYousseff/logs/
-FromYousseff/plots/
+
+
 FromYousseff/models/
 models/
 !FromYousseff/models/qube_sac_final.zip

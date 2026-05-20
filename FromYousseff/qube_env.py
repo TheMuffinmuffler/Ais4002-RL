@@ -223,8 +223,10 @@ class QubeEnv(gym.Env):
             alpha = self.np_random.uniform(-np.pi, np.pi)
             alpha_dot = self.np_random.uniform(-1.0, 1.0)
 
-        theta = self.np_random.uniform(-0.15, 0.15)
-        theta_dot = self.np_random.uniform(-0.5, 0.5)
+        # Super-Env: Randomized Arm Starts (full range)
+        # Forces the model to handle border conditions from step 0
+        theta = self.np_random.uniform(-self.hard_stop_angle, self.hard_stop_angle)
+        theta_dot = self.np_random.uniform(-1.0, 1.0)
 
         self.state = np.array(
             [theta, self._wrap_pi(alpha), theta_dot, alpha_dot],
@@ -287,9 +289,14 @@ class QubeEnv(gym.Env):
         smooth_mult = 5.0 if alpha_error < np.deg2rad(90.0) else 0.1
         p_smooth = smooth_mult * (requested_norm - (self.prev_voltage / ACTION_LIMIT))**2
 
-        # 6. Boundary Wall (Concrete Safety)
+        # 6. Boundary Wall (Elastic Safety)
+        # Only penalize if we are moving TOWARD the wall (prevents wall fear)
         out_excess = max(0.0, abs(theta) - np.deg2rad(120.0))
-        p_boundary = 2000.0 * out_excess**2
+        moving_toward_wall = (theta > 0 and th_dot > 0) or (theta < 0 and th_dot < 0)
+        
+        p_boundary = 0.0
+        if out_excess > 0 and moving_toward_wall:
+            p_boundary = 3000.0 * out_excess**2
 
         # 7. The "Stillness-Filtered" Jackpot (The Catch)
         r_persistence = 0.0
@@ -302,13 +309,19 @@ class QubeEnv(gym.Env):
         # 8. Departure Tax (Kept at -100 to maintain engagement)
         if fell_out:
             departure_tax = -100.0
+
+        # 9. Survival Bonus (The Carrot)
+        # Removed to avoid "lazy agent" local minimum (hanging at bottom)
+        r_survival = 0.0
         
-        reward = r_balance + r_swing + r_persistence + departure_tax - p_center - p_effort - p_smooth - p_boundary
+        reward = (r_balance + r_swing + r_persistence + r_survival + departure_tax 
+                  - p_center - p_effort - p_smooth - p_boundary)
         
         components = {
             "r_balance": r_balance,
             "r_swing": r_swing,
             "r_persistence": r_persistence,
+            "r_survival": r_survival,
             "departure_tax": departure_tax,
             "p_center": -p_center,
             "p_effort": -p_effort,
@@ -350,6 +363,16 @@ class QubeEnv(gym.Env):
                 self.state[0] = -self.hard_stop_angle
                 self.state[2] = -0.25 * self.state[2]
 
+        # --- Random Perturbation (Hitting the pendulum) ---
+        # User requested 5-10% frequency, but 7.5% was too chaotic. 
+        # Reducing to 2.5% (2.5x original) for better stability.
+        is_hit = False
+        if self.domain_randomization and np.cos(self.state[1]) > 0.8:
+            if self.np_random.random() < 0.025: 
+                hit_velocity = self.np_random.uniform(-5.0, 5.0) 
+                self.state[3] += hit_velocity
+                is_hit = True
+
         theta, alpha, th_dot, al_dot = self.state
         alpha_error = abs(self._wrap_pi(alpha - np.pi))
         
@@ -364,15 +387,19 @@ class QubeEnv(gym.Env):
 
         reward, components = self.compute_reward(theta, alpha, th_dot, al_dot, requested_norm, fell_out)
 
-        # Termination logic: Goldilocks Runway (400 degrees)
+        # Termination logic: 
+        # Extreme velocities or over-rotation
         terminated = bool(abs(th_dot) > 70.0 or abs(al_dot) > 100.0 or abs(alpha) > np.deg2rad(400.0))
+        
+        # Early Termination Penalty: Reduced to remove fear of high speeds.
+        # Since r_survival is 0, even -200 is worse than hanging at the bottom (0).
         if terminated:
-            reward -= 500.0
+            reward -= 200.0
 
         self.prev_voltage = voltage
         truncated = self._step_count >= self._max_episode_steps
 
-        return self._get_obs(), float(reward), terminated, truncated, {"reward_components": components}
+        return self._get_obs(), float(reward), terminated, truncated, {"reward_components": components, "hit": is_hit}
 
     def render(self): return None
     def close(self): pass

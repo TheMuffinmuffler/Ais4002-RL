@@ -102,6 +102,7 @@ def deploy(algo_name, rgb=(0, 999, 0), model_path=None):
         prev_theta = np.deg2rad(theta_deg)
         prev_alpha = np.deg2rad(alpha_deg)
         prev_voltage = 0.0
+        delayed_voltage_request = 0.0  # Training used a 1-step delay
         th_dot_filt = 0.0
         al_dot_filt = 0.0
         hits_left = 0
@@ -145,10 +146,15 @@ def deploy(algo_name, rgb=(0, 999, 0), model_path=None):
 
             action, _ = model.predict(obs, deterministic=True)
             # Super-Env: action is normalized [-1, 1], scale it to ACTION_LIMIT
-            requested_voltage = float(np.asarray(action).reshape(-1)[0]) * ACTION_LIMIT * POWER_GAIN * MOTOR_INVERT
-            requested_voltage = float(np.clip(requested_voltage, -ACTION_LIMIT, ACTION_LIMIT))
-            voltage = (1.0 - ACTION_FILTER) * prev_voltage + ACTION_FILTER * requested_voltage
+            new_request = float(np.asarray(action).reshape(-1)[0]) * ACTION_LIMIT * POWER_GAIN * MOTOR_INVERT
+            new_request = float(np.clip(new_request, -ACTION_LIMIT, ACTION_LIMIT))
+            
+            # Apply 1-step delay and filter
+            voltage = (1.0 - ACTION_FILTER) * prev_voltage + ACTION_FILTER * delayed_voltage_request
             voltage = float(np.clip(voltage, -ACTION_LIMIT, ACTION_LIMIT))
+            
+            # Update delay buffer for next step
+            delayed_voltage_request = new_request
 
             if abs(theta) > SAFETY_KILL_RAD:
                 print(f"\nCRITICAL SAFETY KILL: Arm at {theta_deg:.2f} deg exceeds limit {np.rad2deg(SAFETY_KILL_RAD):.2f} deg.")

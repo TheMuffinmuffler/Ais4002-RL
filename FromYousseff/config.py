@@ -8,26 +8,26 @@ import numpy as np
 
 # ---------------------------------------------------------------------------
 # Physical QUBE-Servo 2 model parameters
-# Source: 2025 AIS4002 QUBE pendulum report table.
+# Source: Official Quanser QUBE-Servo 2 Embedded Data Sheet specifications.
 # Convention used everywhere in this repo:
 #   theta = arm angle, 0 rad at the centre
 #   alpha = pendulum angle, 0 rad hanging down, +/- pi rad upright
 # ---------------------------------------------------------------------------
 M_R = 0.095                  # kg, rotary arm mass; kept for documentation
-L_R = 0.086                  # m, rotary arm length
-J_R = 0.0001172              # kg m^2, rotary arm inertia
-D_R = 0.0004                 # N m s/rad, arm damping
+L_R = 0.085                  # m, rotary arm length
+J_R = 5.72e-5                # kg m^2, rotary arm inertia (CoM)
+D_R = 0.0015                 # N m s/rad, arm damping
 
-M_P = 0.053                  # kg, pendulum mass
-L_P = 0.128                  # m, pendulum total length
-L_P_COG = 0.128 / 2.0        # m, pendulum centre of gravity
-J_P = 0.0000235              # kg m^2, pendulum inertia
-D_P = 0.000003               # N m s/rad, pendulum damping
+M_P = 0.024                  # kg, pendulum mass (corrected from 0.053 kg inertia disc)
+L_P = 0.129                  # m, pendulum total length
+L_P_COG = 0.129 / 2.0        # m, pendulum centre of gravity (CoM)
+J_P = 3.33e-5                # kg m^2, pendulum inertia (CoM)
+D_P = 0.0005                 # N m s/rad, pendulum damping
 
 G = 9.81                     # m/s^2
-RM = 8.94                    # Ohm
-KT = 0.0431                  # N m/A
-KM = 0.0431                  # V/(rad/s)
+RM = 8.4                     # Ohm
+KT = 0.042                   # N m/A
+KM = 0.042                   # V/(rad/s)
 K_CABLE = 0.002              # N m/rad, encoder-cable restoring stiffness
 
 # ---------------------------------------------------------------------------
@@ -39,8 +39,8 @@ ACTION_LIMIT = 24.0          # V, safe training/deployment voltage limit
 HARD_STOP_RAD = 2.37         # roughly +/-136 deg
 ENCODER_RES = 2048
 
-VELOCITY_FILTER = 0.65       # used in simulation observation and deployment
-ACTION_FILTER = 0.25         # voltage low-pass filter for deployment/sim
+VELOCITY_FILTER = 0.45       # slightly faster than training (0.65) to handle real-world momentum
+ACTION_FILTER = 0.25         # MUST match training (0.25)
 STICTION_VOLTAGE = 0.35      # simple motor dead-zone estimate
 
 # Domain randomization: not too wide. Brutal truth: huge randomization makes
@@ -67,12 +67,12 @@ EVAL_FREQ = 20_000
 # Deployment mapping. These must be identical for PPO, TD3, and SAC.
 # If the motor goes the wrong way on your hardware, change MOTOR_INVERT only.
 # ---------------------------------------------------------------------------
-POWER_GAIN = 1.0
-MOTOR_INVERT = -1.0
-THETA_INVERT = 1.0
-PENDULUM_INVERT = 1.0
-SAFETY_LIMIT_RAD = 2.1
-SAFETY_KILL_RAD = 2.3
+POWER_GAIN = 0.80            # DETUNED FOR INITIAL HW SAFETY TRIALS
+MOTOR_INVERT = -1.0          # Invert voltage so +u moves arm LEFT
+THETA_INVERT = -1.0          # Invert arm sensor so LEFT is positive
+PENDULUM_INVERT = -1.0       # Invert pendulum sensor so CCW is positive
+SAFETY_LIMIT_RAD = 2.2
+SAFETY_KILL_RAD = 2.45
 MAX_SAME_SIDE_HITS = 20
 
 # ---------------------------------------------------------------------------
