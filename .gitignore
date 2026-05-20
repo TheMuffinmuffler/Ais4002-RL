@@ -164,6 +164,7 @@ FromYousseff/Data/
 
 # RL Models, Plots and Logs
 *.zip
+!FromYousseff/Lasthopemodel/*.zip
 *.csv
 *.png
 *.npz
