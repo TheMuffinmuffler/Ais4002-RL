@@ -1,22 +1,21 @@
-"""Central configuration for the QUBE-Servo 2 RL project.
+"""Configuration and Physical Parameters for the QUBE-Servo 2 RL Project.
 
-The values here are deliberately conservative.  They are meant to give usable
-models in a reasonable time, not to chase a 10-hour training run.
+This module centralizes all physical constants, simulation settings, and 
+hardware-specific deployment mappings. Parameters are sourced from the 
+official Quanser QUBE-Servo 2 Embedded Data Sheet.
 """
 
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# Physical QUBE-Servo 2 model parameters
-# Source: Official Quanser QUBE-Servo 2 Embedded Data Sheet specifications.
-# Convention used everywhere in this repo:
-#   theta = arm angle, 0 rad at the centre
-#   alpha = pendulum angle, 0 rad hanging down, +/- pi rad upright
+# Physical System Parameters (Official Quanser Specifications)
+# theta: rotary arm angle (0 rad = center)
+# alpha: pendulum angle (0 rad = hanging down, pi rad = upright)
 # ---------------------------------------------------------------------------
-M_R = 0.095                  # kg, rotary arm mass; kept for documentation
-L_R = 0.085                  # m, rotary arm length
-J_R = 5.72e-5                # kg m^2, rotary arm inertia (CoM)
-D_R = 0.0015                 # N m s/rad, arm damping
+M_R = 0.095                  # Rotary arm mass [kg]
+L_R = 0.085                  # Rotary arm length [m]
+J_R = 5.72e-5                # Rotary arm inertia about CoM [kg*m^2]
+D_R = 0.0015                 # Arm viscous damping [N*m*s/rad]
 
 M_P = 0.024                  # kg, pendulum mass (corrected from 0.053 kg inertia disc)
 L_P = 0.129                  # m, pendulum total length

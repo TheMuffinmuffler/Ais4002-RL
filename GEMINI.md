@@ -9,3 +9,4 @@
 ## Context Management
 - **Performance Awareness:** Be mindful of context bloat. Use surgical file reads (`start_line`/`end_line`) and avoid reading large data files (.csv, .zip).
 - **Persistence:** Use `MEMORY.md` in the private memory folder to store long-term project state and "threads" so they survive session restarts.
+- **Final Model Target:** The folder `FromYousseff/Lasthopemodel/` is the official repository for production-ready, validated models. Always look here for the current deployment candidate.

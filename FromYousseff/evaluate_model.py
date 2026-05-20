@@ -62,7 +62,8 @@ def evaluate_detailed(algo="sac", n_episodes=10, save_plots=True, model_path_ove
     # Create the environment with domain randomization enabled to test robustness (pushes)
     env = QubeEnv(domain_randomization=True)
 
-    # Robust loading for all algorithms
+    # Robust Loading: Attempt to load models with appropriate custom objects or fallback settings.
+    # SAC models often require an ent_coef, while PPO models are forced to CPU for stable evaluation.
     custom_objects = {}
     if algo == "sac":
         custom_objects["ent_coef"] = "auto" 
@@ -75,6 +76,7 @@ def evaluate_detailed(algo="sac", n_episodes=10, save_plots=True, model_path_ove
         elif algo == "td3":
             model = TD3.load(model_path, env=env)
     except Exception as e:
+        # Fallback mechanism for older models or incompatible custom object schemas.
         print(f"Standard load failed for {algo.upper()}, attempting robust fallback... Error: {e}")
         try:
             if algo == "sac":

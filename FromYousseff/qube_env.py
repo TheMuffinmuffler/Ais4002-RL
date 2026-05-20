@@ -35,13 +35,13 @@ from config import (
 
 class QubeEnv(gym.Env):
     """
-    SUPER-ENV v6.11: "Centered Sniper" configuration.
+    Simulation environment for the Quanser QUBE-Servo 2 rotary inverted pendulum.
     
-    Features:
-        - Centering Gate (exp(-theta^2)) applied to major rewards.
-        - Coupled Balance & Stillness (Gaussian).
-        - Mastery Curriculum (70% Classic starts).
-        - Beefed up r_kick (-5.0).
+    This version (v6.11) implements:
+        - Gaussian reward functions for coupled balance and stillness.
+        - Mastery curriculum with randomized start states for faster convergence.
+        - Robustness features like 1-step action delay and random pendulum perturbations.
+        - Elastic boundary penalties to prevent motor hard-stop collisions.
     """
 
     metadata = {"render_modes": ["human"], "render_fps": int(1.0 / DT)}

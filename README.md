@@ -1,103 +1,78 @@
-# Quanser Qube Servo 2 Control & RL Project
+# QUBE-Servo 2 Reinforcement Learning Project
 
-## Introduction
-This project provides a comprehensive framework for controlling and simulating the Quanser Qube Servo 2 (Inverted Pendulum). It features hardware interfacing via Serial, a custom physics simulation, Reinforcement Learning (RL) training with multiple state-of-the-art algorithms, and classical control methods.
+This repository contains a high-fidelity Reinforcement Learning environment and training pipeline for the Quanser QUBE-Servo 2. It is designed to train robust agents capable of swinging up and balancing the pendulum from any starting position.
 
-The primary goal is to achieve a robust "swing-up and balance" behavior that transfers seamlessly from simulation to physical hardware.
+## Folder Structure
 
-## Key Features
-- **Multiple RL Algorithms**: Support for **PPO**, **SAC**, and **TD3** via Stable Baselines 3.
-- **High-Fidelity Simulation**: Custom Gymnasium environment (`QubeEnv`) with RK4 integration.
-- **Sim-to-Real Robustness**:
-    - **Domain Randomization**: Randomizes mass, length, damping, and stiction.
-    - **Hardware Emulation**: Models latency (20ms), sensor noise, and encoder quantization.
-    - **Action Filtering**: Smooths control signals to protect hardware.
-    - **Robustness Training**: Models are trained with random "force perturbations" (hits) while balancing to improve real-world recovery.
-- **Verified Hardware Mapping**: Deployment scripts automatically map hardware encoders (Reset at BOTTOM=0) to Simulation coordinates (TOP=0, BOTTOM=-180).
+- **`/FromYousseff`**: **Primary Development Sandbox.** Contains the most up-to-date environment logic (`qube_env.py`), training scripts (`train_rl_SAC.py`), and evaluation tools.
+- **`/FromYousseff/Lasthopemodel`**: **Official Deployment Target.** Contains the final, validated, and smoothed models ready for hardware.
+- **`/FromYousseff/models`**: Storage for raw training checkpoints and intermediate weights.
+- **`/logs`**: Tensorboard and CSV logs for training runs.
+- **`/QUBE`**: Arduino firmware for the QUBE-Servo 2 serial interface.
 
-## Project Structure
+---
 
-### 1. Reinforcement Learning
-- **Environments**:
-    - `qube_env.py`: The core Gymnasium environment. Alpha=0 is TOP.
-- **Training**:
-    - `train_rl.py`: Main script for PPO training/retraining.
-    - `train_rl_SAC.py`: Specialized script for fresh SAC training.
-    - `train_rl_TD3.py`: Specialized script for TD3 training.
-- **Deployment**:
-    - `deploy_qube_serial.py`: Deploys trained PPO models to hardware.
-    - `deploy_qube_serial_SAC.py`: Deploys SAC models with optimized coordinate mapping.
-    - `deploy_qube_serial_TD3.py`: Deploys TD3 models.
-- **Evaluation**:
-    - `test_rl.py` / `test_rl_SAC.py` / `test_rl_TD3.py`: Evaluate models in simulation.
-    - `check_upright.py`: Quick diagnostic for model balance stability.
+## The Environment (`qube_env.py`)
 
-### 2. Hardware Interface & Diagnostics
-- **Core**:
-    - `QUBE.py`: Python serial driver for the Qube Servo 2.
-    - `com.py`: Serial protocol definitions.
-    - `QUBE/`: C++ firmware for the microcontroller.
-- **Diagnostics**:
-    - `check_sensors.py`: Verify encoder and RPM readings.
-    - `check_polarity.py`: Ensure motor and pendulum directions are correct.
-    - `check_limits.py`: Test the software safety limits.
-    - `check_upright.py`: Verify the "top" position calibration.
+The environment is a Gymnasium-compatible wrapper around a 4th-order ODE simulation of the QUBE-Servo 2.
 
-### 3. Classical Control
-- `main.py`: Entry point for the live PID tuner GUI.
-- `control.py`: Central file for implementing custom control laws.
-- `PID.py`: Robust PID implementation with anti-windup.
-- `inverted_pendulum.py`: Energy-based swing-up + PD balance controller.
+### Observation Space (9-D)
+1. `sin(theta)`, `cos(theta)` (Arm Angle)
+2. `sin(alpha)`, `cos(alpha)` (Pendulum Angle)
+3. `theta_dot` (Arm Velocity)
+4. `alpha_dot` (Pendulum Velocity)
+5. `voltage / 24` (Previous Action)
+6. `step_count / 500` (Time progress)
+7. `alpha / 2pi` (Normalized rotation count)
 
-## Getting Started
+### Reward Structure (v6.11 "No Survival" Edition)
+To prevent the "Lazy Agent" bug (where the agent earns points by doing nothing at the bottom), the reward function is strictly performance-based:
 
-### Installation
-1. Install dependencies:
-   ```bash
-   python install.py
-   ```
-2. (Optional) Manual install:
-   ```bash
-   pip install gymnasium stable-baselines3 torch numpy pyserial PyQt5 pyqtgraph
-   ```
+| Component | Max Value | Description |
+| :--- | :--- | :--- |
+| **Balance** | +200.0/step | Gaussian reward for being upright and still. |
+| **Swing-Up** | +20.0/step | Parabolic reward for pendulum height. |
+| **Stillness Jackpot**| +500.0/step | Growing reward for consecutive steps spent upright. |
+| **Survival** | **0.0** | Removed to force exploration of swing-up. |
 
-### Hardware Setup
-1. Upload the code in `QUBE/examples/Python_Serial/Python_Serial.ino` to your Arduino/Teensy.
-2. Find your Serial port and update `COM_PORT` in `control.py`.
-3. Verify connection:
-   ```bash
-   python check_sensors.py
-   ```
+### Penalties
+- **Termination:** `-200.0` if the agent crashes (extreme velocity or over-rotation).
+- **Centering:** Scaled penalty for being away from the arm's center (0 rad).
+- **Boundary:** Massive penalty (`-3000.0`) for moving toward the physical hard stops ($\pm 120^\circ$).
 
-### Training an Agent
-To train a new SAC agent (recommended for best performance):
+---
+
+## Training Workflow
+
+### 1. Training a New Model
+To start a fresh SAC (Soft Actor-Critic) training run with a 512x512x512 architecture:
 ```bash
-python train_rl_SAC.py
-```
-Models are saved in the `models/` directory.
-
-### Deployment
-To run your trained model on the physical Qube:
-```bash
-python deploy_qube_serial_SAC.py
+python FromYousseff/train_rl_SAC.py --fresh --steps 1000000 --device cuda
 ```
 
-## Technical Details
+### 2. Surgical Refinement (Smoothing)
+Models trained with high entropy can be "jittery." Before deploying to hardware, run a refinement to calm the control law (Entropy Locked at 0.1):
+```bash
+python FromYousseff/refine_sac.py --steps 300000 --device cuda
+```
 
-### Observation Space (7-D)
-The model receives the following state vector:
-1. `sin(theta)` (Motor Arm)
-2. `cos(theta)`
-3. `sin(alpha)` (Pendulum)
-4. `cos(alpha)`
-5. `theta_dot` (Filtered velocity)
-6. `alpha_dot` (Filtered velocity)
-7. `prev_voltage` (Normalized)
+---
 
-### Coordinate System
-- **Simulation**: `alpha = 0` is the upright (TOP) position.
-- **Hardware**: The encoders are typically reset while the pendulum is hanging down (`alpha = pi`). The deployment scripts handle the mapping to ensure the model sees `0` at the top.
+## Deployment Workflow
 
-## Safety Features
-- **Software Safety Wall**: The motor is automatically cut if `|theta| > 2.3` radians (~130°).
-- **Current Protection**: The firmware monitors for stalls and amplifier faults, indicated by a Red LED.
+### 1. Identify the Final Model
+The official deployment model is always located in:
+`FromYousseff/Lasthopemodel/qube_sac_refined_FINAL.zip`
+
+### 2. Hardware Deployment
+To deploy to the physical QUBE-Servo 2 via serial:
+```bash
+python FromYousseff/deploy_qube_serial_SAC.py --model_path FromYousseff/Lasthopemodel/qube_sac_refined_FINAL.zip
+```
+
+---
+
+## Engineering Standards
+- **Sim-to-Real Robustness:** Training uses 2.5% frequency "pokes" and $\pm 12\%$ domain randomization.
+- **Mastery:** Models are validated to ensure they hit the ~150k+ reward threshold (Master Balancer).
+- **Safety:** Deployment scripts include a `SAFETY_KILL_RAD` to protect the hardware.
