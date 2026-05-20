@@ -151,19 +151,30 @@ cython_debug/
 # OS X
 .DS_Store
 
+# Private and IDE specific
+.antigravitycli/
+.idea/
+.vscode/
+.venv/
+
 # Project specific
 Data/
+FromYousseff/Data/
 /Images
 
-# RL Models and Logs
+# RL Models, Plots and Logs
 *.zip
 *.csv
 *.png
 *.npz
 logs/
-
-
-FromYousseff/models/
+FromYousseff/logs/
+plots/
+FromYousseff/plots/
 models/
-!FromYousseff/models/qube_sac_final.zip
-!models/qube_sac_retrain_final.zip
+FromYousseff/models/
+/Data
+/logs
+/models
+/plots
+/__pycache__
